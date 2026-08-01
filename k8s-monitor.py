@@ -38,7 +38,18 @@ DISCORD_COLORS = {
     "amber": 0xF1C40F,
 }
 
+# Benign: host has >3 nameservers (systemd-resolved, dual-stack).
+# kubelet truncates to 3 and warns; no functional impact.
+# See kubernetes/kubernetes#126585 (no upstream suppress flag yet).
+WARNING_FILTER = {"DNSConfigForming"}
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _warning_is_filtered(line: str) -> bool:
+    """True if the warning's REASON column is one we intentionally ignore."""
+    fields = line.split()
+    return len(fields) > 3 and fields[3] in WARNING_FILTER
 
 
 def run_kubectl(args: list[str]) -> tuple[str, str]:
@@ -153,18 +164,17 @@ def gather_cluster_state() -> dict:
             "--sort-by=.lastTimestamp",
         ]
     )
+    warning_lines = [
+        line
+        for line in out.splitlines()
+        if line.strip()
+        and not line.strip().startswith("NAMESPACE")
+        and "No resources" not in line
+        and not _warning_is_filtered(line)
+    ]
     # Trim to last 30 lines to keep the prompt short
-    lines = out.splitlines()
-    state["warning_events"] = "\n".join(lines[-30:]) if lines else "None"
-    state["warning_count"] = len(
-        [
-            line
-            for line in lines
-            if line.strip()
-            and not line.strip().startswith("NAMESPACE")
-            and "No resources" not in line
-        ]
-    )
+    state["warning_events"] = "\n".join(warning_lines[-30:]) if warning_lines else "None"
+    state["warning_count"] = len(warning_lines)
 
     state["server_version"] = get_server_version()
 

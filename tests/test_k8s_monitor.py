@@ -151,6 +151,36 @@ def test_gather_cluster_state_healthy_outputs(km, monkeypatch):
     assert state["pending_pods"] == "None"
 
 
+def test_gather_cluster_state_filters_dnsconfigforming_warnings(km, monkeypatch):
+    def fake(args):
+        if "get events" in " ".join(args):
+            return (
+                "NAMESPACE LAST SEEN TYPE REASON OBJECT MESSAGE\n"
+                "kube-system 1m Warning DNSConfigForming pod/coredns-x "
+                "Nameserver limits were exceeded, some nameservers have been omitted, "
+                "the applied nameserver line is: 2a01:4ff:ff00::add:2 "
+                "2a01:4ff:ff00::add:1 185.12.64.1\n"
+                "kube-system 2m Warning DNSConfigForming pod/cilium-y "
+                "Nameserver limits were exceeded, some nameservers have been omitted, "
+                "the applied nameserver line is: 2a01:4ff:ff00::add:2 "
+                "2a01:4ff:ff00::add:1 185.12.64.1\n"
+                "default 3m Warning BackOff pod/z restart loop\n",
+                "",
+            )
+        return "", ""
+
+    monkeypatch.setattr(km, "run_kubectl", fake)
+    state = km.gather_cluster_state()
+
+    assert state["warning_count"] == 1
+    assert "DNSConfigForming" not in state["warning_events"]
+    assert "BackOff" in state["warning_events"]
+
+
+def test_warning_filter_ignores_dnsconfigforming(km):
+    assert "DNSConfigForming" in km.WARNING_FILTER
+
+
 def test_gather_cluster_state_failed_jobs_invalid_json(km, monkeypatch):
     def fake(args):
         if "get jobs" in " ".join(args):
