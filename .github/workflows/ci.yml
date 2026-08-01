@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "k8s-monitor.py"
+      - "src/**"
+      - "utils/**"
       - "tests/**"
       - "pyproject.toml"
       - "uv.lock"
@@ -11,6 +13,8 @@ on:
   pull_request:
     paths:
       - "k8s-monitor.py"
+      - "src/**"
+      - "utils/**"
       - "tests/**"
       - "pyproject.toml"
       - "uv.lock"

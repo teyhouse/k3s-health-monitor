@@ -74,11 +74,20 @@ uv run pytest              # tests
 ## Project layout
 
 ```
-pyproject.toml            uv project definition and dependencies
-k8s-monitor.py            main monitoring script
-tests/                    pytest test suite
-.github/workflows/ci.yml  CI pipeline (lint + tests)
-.env.example              example configuration (copy to .env)
+pyproject.toml                uv project definition and dependencies
+k8s-monitor.py                thin entry point — calls orchestrate.run()
+src/k8s_monitor/
+  config.py                      env vars, constants (model, colors, filters)
+  kube.py                        kubectl/velero commands + cluster state gathering
+  groq.py                        Groq LLM client
+  discord_client.py              Discord webhook sender
+  reporting.py                   pure functions: embed fields, prompt, health check
+  orchestrate.py                 main flow: gather → decide → report
+utils/
+  shell.py                       generic subprocess runner (dedupes run_kubectl/velero)
+tests/                          pytest test suite
+.github/workflows/ci.yml       CI pipeline (lint + tests)
+.env.example                     example configuration (copy to .env)
 ```
 
 ## Notes

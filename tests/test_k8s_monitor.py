@@ -1,6 +1,15 @@
 import json
+import sys
+from pathlib import Path
 
 import pytest
+
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from k8s_monitor import config, discord_client, groq, kube, orchestrate, reporting  # noqa: E402
+from utils import shell  # noqa: E402
 
 HEALTHY_STATE = {
     "nodes": "NAME STATUS ROLES\nnode1 Ready control-plane",
@@ -106,40 +115,40 @@ def fake_kubectl(args):
 # ── has_issues ──────────────────────────────────────────────────────────────
 
 
-def test_has_issues_returns_false_for_healthy_state(km):
-    assert km.has_issues(HEALTHY_STATE) is False
+def test_has_issues_returns_false_for_healthy_state():
+    assert reporting.has_issues(HEALTHY_STATE) is False
 
 
-def test_has_issues_detects_problems(km):
+def test_has_issues_detects_problems():
     state = dict(HEALTHY_STATE)
     state["pending_pods"] = "default/pod-2"
-    assert km.has_issues(state) is True
+    assert reporting.has_issues(state) is True
 
 
-def test_has_issues_detects_failed_backups(km):
+def test_has_issues_detects_failed_backups():
     state = dict(HEALTHY_STATE)
     state["velero_failed_backups"] = "daily-app\terror putting object"
-    assert km.has_issues(state) is True
+    assert reporting.has_issues(state) is True
 
 
 # ── footer_text ─────────────────────────────────────────────────────────────
 
 
-def test_footer_text_includes_server_version(km):
+def test_footer_text_includes_server_version():
     expected = "k8s-monitor • k8s v1.36.2+k3s1 • ran at 2026-08-01 08:00 UTC"
-    assert km.footer_text("2026-08-01 08:00 UTC", HEALTHY_STATE) == expected
+    assert reporting.footer_text("2026-08-01 08:00 UTC", HEALTHY_STATE) == expected
 
 
-def test_footer_text_omits_version_when_unavailable(km):
+def test_footer_text_omits_version_when_unavailable():
     state = dict(HEALTHY_STATE, server_version="")
-    assert "k8s v1.36.2+k3s1" not in km.footer_text("2026-08-01 08:00 UTC", state)
+    assert "k8s v1.36.2+k3s1" not in reporting.footer_text("2026-08-01 08:00 UTC", state)
 
 
 # ── build_summary_fields ────────────────────────────────────────────────────
 
 
-def test_build_summary_fields(km):
-    fields = km.build_summary_fields(HEALTHY_STATE)
+def test_build_summary_fields():
+    fields = reporting.build_summary_fields(HEALTHY_STATE)
     assert len(fields) == 7
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
@@ -152,32 +161,32 @@ def test_build_summary_fields(km):
 # ── get_server_version ──────────────────────────────────────────────────────
 
 
-def test_get_server_version_parses_git_version(km, monkeypatch):
+def test_get_server_version_parses_git_version(monkeypatch):
     monkeypatch.setattr(
-        km,
+        kube,
         "run_kubectl",
         lambda args: (json.dumps({"serverVersion": {"gitVersion": "v1.36.2+k3s1"}}), ""),
     )
-    assert km.get_server_version() == "v1.36.2+k3s1"
+    assert kube.get_server_version() == "v1.36.2+k3s1"
 
 
-def test_get_server_version_returns_empty_on_no_output(km, monkeypatch):
-    monkeypatch.setattr(km, "run_kubectl", lambda args: ("", ""))
-    assert km.get_server_version() == ""
+def test_get_server_version_returns_empty_on_no_output(monkeypatch):
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: ("", ""))
+    assert kube.get_server_version() == ""
 
 
-def test_get_server_version_returns_empty_on_invalid_json(km, monkeypatch):
-    monkeypatch.setattr(km, "run_kubectl", lambda args: ("not json", ""))
-    assert km.get_server_version() == ""
+def test_get_server_version_returns_empty_on_invalid_json(monkeypatch):
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: ("not json", ""))
+    assert kube.get_server_version() == ""
 
 
 # ── gather_cluster_state ────────────────────────────────────────────────────
 
 
-def test_gather_cluster_state_counts(km, monkeypatch):
-    monkeypatch.setattr(km, "run_kubectl", fake_kubectl)
-    monkeypatch.setattr(km, "run_velero", lambda args: ("", ""))
-    state = km.gather_cluster_state()
+def test_gather_cluster_state_counts(monkeypatch):
+    monkeypatch.setattr(kube, "run_kubectl", fake_kubectl)
+    monkeypatch.setattr(kube, "run_velero", lambda args: ("", ""))
+    state = kube.gather_cluster_state()
 
     assert state["kubectl_ok"] is True
     assert state["node_total"] == 2
@@ -191,10 +200,10 @@ def test_gather_cluster_state_counts(km, monkeypatch):
     assert state["server_version"] == "v1.36.2+k3s1"
 
 
-def test_gather_cluster_state_healthy_outputs(km, monkeypatch):
-    monkeypatch.setattr(km, "run_kubectl", lambda args: ("", ""))
-    monkeypatch.setattr(km, "run_velero", lambda args: ("", ""))
-    state = km.gather_cluster_state()
+def test_gather_cluster_state_healthy_outputs(monkeypatch):
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: ("", ""))
+    monkeypatch.setattr(kube, "run_velero", lambda args: ("", ""))
+    state = kube.gather_cluster_state()
 
     assert state["kubectl_ok"] is False
     assert state["non_running_pods"] == "None"
@@ -203,7 +212,7 @@ def test_gather_cluster_state_healthy_outputs(km, monkeypatch):
     assert state["pending_pods"] == "None"
 
 
-def test_gather_cluster_state_filters_dnsconfigforming_warnings(km, monkeypatch):
+def test_gather_cluster_state_filters_dnsconfigforming_warnings(monkeypatch):
     def fake(args):
         if "get events" in " ".join(args):
             return (
@@ -221,70 +230,70 @@ def test_gather_cluster_state_filters_dnsconfigforming_warnings(km, monkeypatch)
             )
         return "", ""
 
-    monkeypatch.setattr(km, "run_kubectl", fake)
-    state = km.gather_cluster_state()
+    monkeypatch.setattr(kube, "run_kubectl", fake)
+    state = kube.gather_cluster_state()
 
     assert state["warning_count"] == 1
     assert "DNSConfigForming" not in state["warning_events"]
     assert "BackOff" in state["warning_events"]
 
 
-def test_warning_filter_ignores_dnsconfigforming(km):
-    assert "DNSConfigForming" in km.WARNING_FILTER
+def test_warning_filter_ignores_dnsconfigforming():
+    assert "DNSConfigForming" in config.WARNING_FILTER
 
 
-def test_gather_cluster_state_failed_jobs_invalid_json(km, monkeypatch):
+def test_gather_cluster_state_failed_jobs_invalid_json(monkeypatch):
     def fake(args):
         if "get jobs" in " ".join(args):
             return "not json", ""
         return "", ""
 
-    monkeypatch.setattr(km, "run_kubectl", fake)
-    state = km.gather_cluster_state()
+    monkeypatch.setattr(kube, "run_kubectl", fake)
+    state = kube.gather_cluster_state()
     assert state["failed_jobs"] == "None"
     assert state["failed_jobs_count"] == 0
 
 
-# ── run_kubectl ─────────────────────────────────────────────────────────────
+# ── run_kubectl / run_velero (via utils.shell) ──────────────────────────────
 
 
-def test_run_kubectl_file_not_found(km, monkeypatch):
+def test_run_kubectl_file_not_found(monkeypatch):
     def boom(args, **kwargs):
         raise FileNotFoundError
 
-    monkeypatch.setattr(km.subprocess, "run", boom)
-    out, err = km.run_kubectl(["get", "nodes"])
+    monkeypatch.setattr(shell.subprocess, "run", boom)
+    out, err = kube.run_kubectl(["get", "nodes"])
     assert out == ""
     assert "kubectl not found" in err
 
 
-def test_run_kubectl_timeout(km, monkeypatch):
+def test_run_kubectl_timeout(monkeypatch):
     def boom(args, **kwargs):
-        raise km.subprocess.TimeoutExpired(cmd=args, timeout=30)
+        raise shell.subprocess.TimeoutExpired(cmd=args, timeout=30)
 
-    monkeypatch.setattr(km.subprocess, "run", boom)
-    out, err = km.run_kubectl(["get", "nodes"])
+    monkeypatch.setattr(shell.subprocess, "run", boom)
+    out, err = kube.run_kubectl(["get", "nodes"])
     assert out == ""
     assert "timed out" in err
+
+
+def test_run_velero_file_not_found(monkeypatch):
+    def boom(args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(shell.subprocess, "run", boom)
+    out, err = kube.run_velero(["get", "backups"])
+    assert out == ""
+    assert "velero not found" in err
 
 
 # ── velero ──────────────────────────────────────────────────────────────────
 
 
-def test_run_velero_file_not_found(km, monkeypatch):
-    def boom(args, **kwargs):
-        raise FileNotFoundError
-
-    monkeypatch.setattr(km.subprocess, "run", boom)
-    out, err = km.run_velero(["get", "backups"])
-    assert out == ""
-    assert "velero not found" in err
-
-
-def test_gather_velero_backups_counts_recent_failures_only(km, monkeypatch):
-    monkeypatch.setattr(km, "VELERO_CHECK_ENABLED", True)
-    monkeypatch.setattr(km, "run_velero", fake_velero)
-    result = km.gather_velero_backups()
+def test_gather_velero_backups_counts_recent_failures_only(monkeypatch):
+    monkeypatch.setattr(config, "VELERO_CHECK_ENABLED", True)
+    monkeypatch.setattr(kube, "run_velero", fake_velero)
+    result = kube.gather_velero_backups()
 
     assert result["velero_failed_count"] == 1
     assert "daily-app-recent" in result["velero_failed_backups"]
@@ -293,26 +302,26 @@ def test_gather_velero_backups_counts_recent_failures_only(km, monkeypatch):
     assert "x-amz-tagging" in result["velero_failed_backups"]
 
 
-def test_gather_velero_backups_disabled_skips_call(km, monkeypatch):
-    monkeypatch.setattr(km, "VELERO_CHECK_ENABLED", False)
-    monkeypatch.setattr(km, "run_velero", lambda args: pytest.fail("velero must not be called"))
-    result = km.gather_velero_backups()
+def test_gather_velero_backups_disabled_skips_call(monkeypatch):
+    monkeypatch.setattr(config, "VELERO_CHECK_ENABLED", False)
+    monkeypatch.setattr(kube, "run_velero", lambda args: pytest.fail("velero must not be called"))
+    result = kube.gather_velero_backups()
 
     assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}
 
 
-def test_gather_velero_backups_empty_output(km, monkeypatch):
-    monkeypatch.setattr(km, "VELERO_CHECK_ENABLED", True)
-    monkeypatch.setattr(km, "run_velero", lambda args: ("", ""))
-    result = km.gather_velero_backups()
+def test_gather_velero_backups_empty_output(monkeypatch):
+    monkeypatch.setattr(config, "VELERO_CHECK_ENABLED", True)
+    monkeypatch.setattr(kube, "run_velero", lambda args: ("", ""))
+    result = kube.gather_velero_backups()
 
     assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}
 
 
-def test_gather_velero_backups_invalid_json(km, monkeypatch):
-    monkeypatch.setattr(km, "VELERO_CHECK_ENABLED", True)
-    monkeypatch.setattr(km, "run_velero", lambda args: ("not json", ""))
-    result = km.gather_velero_backups()
+def test_gather_velero_backups_invalid_json(monkeypatch):
+    monkeypatch.setattr(config, "VELERO_CHECK_ENABLED", True)
+    monkeypatch.setattr(kube, "run_velero", lambda args: ("not json", ""))
+    result = kube.gather_velero_backups()
 
     assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}
 
@@ -320,9 +329,9 @@ def test_gather_velero_backups_invalid_json(km, monkeypatch):
 # ── ask_groq ────────────────────────────────────────────────────────────────
 
 
-def test_ask_groq_returns_warning_when_key_missing(km, monkeypatch):
-    monkeypatch.setattr(km, "GROQ_API_KEY", "YOUR_GROQ_API_KEY_HERE")
-    result = km.ask_groq("prompt")
+def test_ask_groq_returns_warning_when_key_missing(monkeypatch):
+    monkeypatch.setattr(config, "GROQ_API_KEY", "YOUR_GROQ_API_KEY_HERE")
+    result = groq.ask_groq("prompt")
     assert "GROQ_API_KEY" in result
     assert "not set" in result
 
@@ -330,96 +339,96 @@ def test_ask_groq_returns_warning_when_key_missing(km, monkeypatch):
 # ── send_discord_embed ──────────────────────────────────────────────────────
 
 
-def test_send_discord_embed_prints_when_webhook_missing(km, monkeypatch, capsys):
-    monkeypatch.setattr(km, "DISCORD_WEBHOOK", "YOUR_DISCORD_WEBHOOK_URL_HERE")
-    km.send_discord_embed({"title": "Test", "color": 1})
+def test_send_discord_embed_prints_when_webhook_missing(monkeypatch, capsys):
+    monkeypatch.setattr(config, "DISCORD_WEBHOOK", "YOUR_DISCORD_WEBHOOK_URL_HERE")
+    discord_client.send_discord_embed({"title": "Test", "color": 1})
     out = capsys.readouterr().out
     assert '"embeds"' in out
 
 
-# ── main() report selection ─────────────────────────────────────────────────
+# ── orchestrate.run() report selection ──────────────────────────────────────
 
 
-def test_main_posts_green_embed_when_healthy(km, monkeypatch):
-    monkeypatch.setattr(km, "gather_cluster_state", lambda: dict(HEALTHY_STATE))
-    monkeypatch.setattr(km, "ask_groq", lambda prompt: pytest.fail("LLM must not be called"))
+def test_main_posts_green_embed_when_healthy(monkeypatch):
+    monkeypatch.setattr(kube, "gather_cluster_state", lambda: dict(HEALTHY_STATE))
+    monkeypatch.setattr(groq, "ask_groq", lambda prompt: pytest.fail("LLM must not be called"))
     sent = []
-    monkeypatch.setattr(km, "send_discord_embed", sent.append)
+    monkeypatch.setattr(discord_client, "send_discord_embed", sent.append)
 
-    km.main()
+    orchestrate.run()
 
     assert len(sent) == 1
     embed = sent[0]
     assert embed["title"] == "✅ K8s Health Check"
-    assert embed["color"] == km.DISCORD_COLORS["green"]
+    assert embed["color"] == config.DISCORD_COLORS["green"]
     assert embed["fields"]
     assert "k8s v1.36.2+k3s1" in embed["footer"]["text"]
 
 
-def test_main_posts_red_embed_when_issues_found(km, monkeypatch):
+def test_main_posts_red_embed_when_issues_found(monkeypatch):
     state = dict(HEALTHY_STATE)
     state["pending_pods"] = "default/pod-2"
-    monkeypatch.setattr(km, "gather_cluster_state", lambda: state)
+    monkeypatch.setattr(kube, "gather_cluster_state", lambda: state)
     prompts = []
     monkeypatch.setattr(
-        km,
+        groq,
         "ask_groq",
         lambda prompt: prompts.append(prompt) or "- pod-2 unschedulable",
     )
     sent = []
-    monkeypatch.setattr(km, "send_discord_embed", sent.append)
+    monkeypatch.setattr(discord_client, "send_discord_embed", sent.append)
 
-    km.main()
+    orchestrate.run()
 
     assert prompts, "LLM should be called when issues exist"
     assert "## Pending Pods" in prompts[0]
     assert len(sent) == 1
     embed = sent[0]
     assert embed["title"] == "🔴 K8s Health Report — Issues Found"
-    assert embed["color"] == km.DISCORD_COLORS["red"]
+    assert embed["color"] == config.DISCORD_COLORS["red"]
     assert "- pod-2 unschedulable" in embed["description"]
 
 
-def test_main_posts_red_embed_when_backups_fail(km, monkeypatch):
+def test_main_posts_red_embed_when_backups_fail(monkeypatch):
     state = dict(HEALTHY_STATE)
     state["velero_failed_backups"] = (
         "daily-app\terror putting object: x-amz-tagging not implemented"
     )
     state["velero_failed_count"] = 1
-    monkeypatch.setattr(km, "gather_cluster_state", lambda: state)
+    monkeypatch.setattr(kube, "gather_cluster_state", lambda: state)
     prompts = []
     monkeypatch.setattr(
-        km,
+        groq,
         "ask_groq",
         lambda prompt: prompts.append(prompt) or "- backups failing",
     )
     sent = []
-    monkeypatch.setattr(km, "send_discord_embed", sent.append)
+    monkeypatch.setattr(discord_client, "send_discord_embed", sent.append)
 
-    km.main()
+    orchestrate.run()
 
     assert prompts, "LLM should be called when backups fail"
     assert "## Velero Backups" in prompts[0]
     assert len(sent) == 1
     embed = sent[0]
     assert embed["title"] == "🔴 K8s Health Report — Issues Found"
-    assert embed["color"] == km.DISCORD_COLORS["red"]
+    assert embed["color"] == config.DISCORD_COLORS["red"]
 
 
-def test_main_posts_amber_embed_when_kubectl_fails(km, monkeypatch):
+def test_main_posts_amber_embed_when_kubectl_fails(monkeypatch):
     state = dict(
         HEALTHY_STATE,
         kubectl_ok=False,
         nodes="kubectl not found. Is it installed and in PATH?",
     )
-    monkeypatch.setattr(km, "gather_cluster_state", lambda: state)
-    monkeypatch.setattr(km, "ask_groq", lambda prompt: pytest.fail("LLM must not be called"))
+    monkeypatch.setattr(kube, "gather_cluster_state", lambda: state)
+    monkeypatch.setattr(groq, "ask_groq", lambda prompt: pytest.fail("LLM must not be called"))
     sent = []
-    monkeypatch.setattr(km, "send_discord_embed", sent.append)
+    monkeypatch.setattr(discord_client, "send_discord_embed", sent.append)
 
-    km.main()
+    orchestrate.run()
 
     assert len(sent) == 1
     embed = sent[0]
     assert embed["title"] == "⚠️ K8s Health Check — Could Not Run"
-    assert embed["color"] == km.DISCORD_COLORS["amber"]
+    assert embed["color"] == config.DISCORD_COLORS["amber"]
