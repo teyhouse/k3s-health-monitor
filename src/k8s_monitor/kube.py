@@ -148,6 +148,29 @@ def gather_cluster_state() -> dict:
     state["node_total"] = node_total
     state["node_ready"] = node_ready
 
+    # Node pressure conditions (DiskPressure, MemoryPressure, PIDPressure)
+    out, _ = run_kubectl(
+        [
+            "get",
+            "nodes",
+            "-o",
+            "jsonpath={range .items[*]}{.metadata.name}{'\\t'}"
+            "{range .status.conditions[*]}{.type}{'='}{.status}{'\\t'}{end}{'\\n'}{end}",
+        ]
+    )
+    pressure_lines = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        node_name = fields[0]
+        for field in fields[1:]:
+            for cond_type in ("DiskPressure", "MemoryPressure", "PIDPressure"):
+                if cond_type in field and "=True" in field:
+                    pressure_lines.append(f"{node_name}\t{cond_type}")
+    state["node_pressure"] = "\n".join(pressure_lines) if pressure_lines else "None"
+    state["node_pressure_count"] = len(pressure_lines)
+
     # All pods across namespaces — filter to non-Running/Completed only
     out, _ = run_kubectl(
         [

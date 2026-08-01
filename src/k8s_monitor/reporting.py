@@ -28,6 +28,11 @@ def build_summary_fields(state: dict) -> list:
             "value": str(state["expired_cert_count"]),
             "inline": True,
         },
+        {
+            "name": "💾 Node Pressure",
+            "value": str(state["node_pressure_count"]),
+            "inline": True,
+        },
     ]
 
 
@@ -40,6 +45,7 @@ def has_issues(state: dict) -> bool:
         "pending_pods",
         "velero_failed_backups",
         "expired_certs",
+        "node_pressure",
     ]
     for key in keys:
         if state.get(key, "None") not in ("None", ""):
@@ -53,6 +59,9 @@ def build_prompt(state: dict, now: str) -> str:
 
 ## Nodes
 {state["nodes"]}
+
+## Node Pressure Conditions (DiskPressure, MemoryPressure, PIDPressure)
+{state["node_pressure"]}
 
 ## Non-Running / Non-Completed Pods
 {state["non_running_pods"]}

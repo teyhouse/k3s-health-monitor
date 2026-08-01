@@ -30,6 +30,8 @@ HEALTHY_STATE = {
     "velero_failed_count": 0,
     "expired_certs": "None",
     "expired_cert_count": 0,
+    "node_pressure": "None",
+    "node_pressure_count": 0,
     "server_version": "v1.36.2+k3s1",
 }
 
@@ -134,6 +136,12 @@ def fake_kubectl(args):
     """Simulate kubectl output for the commands gather_cluster_state() runs."""
     joined = " ".join(args)
     if "get nodes" in joined:
+        if "jsonpath" in joined:
+            return (
+                "node1\tReady=True\tDiskPressure=False\tMemoryPressure=False\tPIDPressure=False\n"
+                "node2\tReady=True\tDiskPressure=False\tMemoryPressure=False\tPIDPressure=False\n",
+                "",
+            )
         return "NAME STATUS ROLES\nnode1 Ready control-plane\nnode2 Ready worker\n", ""
     if "jsonpath" in joined:
         return "default\tpod-1\tCrashLoopBackOff\n", ""
@@ -197,6 +205,12 @@ def test_has_issues_detects_expired_certs():
     assert reporting.has_issues(state) is True
 
 
+def test_has_issues_detects_node_pressure():
+    state = dict(HEALTHY_STATE)
+    state["node_pressure"] = "node1\tDiskPressure"
+    assert reporting.has_issues(state) is True
+
+
 # ── footer_text ─────────────────────────────────────────────────────────────
 
 
@@ -215,7 +229,7 @@ def test_footer_text_omits_version_when_unavailable():
 
 def test_build_summary_fields():
     fields = reporting.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 8
+    assert len(fields) == 9
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
@@ -223,6 +237,7 @@ def test_build_summary_fields():
     assert by_name["⚠️ Warnings (1h)"] == "0"
     assert by_name["🛟 Failed Backups (24h)"] == "0"
     assert by_name["🔏 Cert Issues"] == "0"
+    assert by_name["💾 Node Pressure"] == "0"
 
 
 # ── get_server_version ──────────────────────────────────────────────────────
@@ -265,6 +280,7 @@ def test_gather_cluster_state_counts(monkeypatch):
     assert state["warning_count"] == 2
     assert state["velero_failed_count"] == 0
     assert state["expired_cert_count"] == 3
+    assert state["node_pressure_count"] == 0
     assert state["server_version"] == "v1.36.2+k3s1"
 
 
@@ -544,6 +560,30 @@ def test_main_posts_red_embed_when_certs_expired(monkeypatch):
 
     assert prompts, "LLM should be called when certs expired"
     assert "## Expired / Expiring Certificates" in prompts[0]
+    assert len(sent) == 1
+    embed = sent[0]
+    assert embed["title"] == "🔴 K8s Health Report — Issues Found"
+    assert embed["color"] == config.DISCORD_COLORS["red"]
+
+
+def test_main_posts_red_embed_when_node_pressure(monkeypatch):
+    state = dict(HEALTHY_STATE)
+    state["node_pressure"] = "node1\tDiskPressure"
+    state["node_pressure_count"] = 1
+    monkeypatch.setattr(kube, "gather_cluster_state", lambda: state)
+    prompts = []
+    monkeypatch.setattr(
+        groq,
+        "ask_groq",
+        lambda prompt: prompts.append(prompt) or "- node1 disk pressure",
+    )
+    sent = []
+    monkeypatch.setattr(discord_client, "send_discord_embed", sent.append)
+
+    orchestrate.run()
+
+    assert prompts, "LLM should be called when node pressure detected"
+    assert "## Node Pressure Conditions" in prompts[0]
     assert len(sent) == 1
     embed = sent[0]
     assert embed["title"] == "🔴 K8s Health Report — Issues Found"
