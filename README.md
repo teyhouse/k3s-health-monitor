@@ -54,7 +54,7 @@ uv run k8s-monitor.py
 Runs twice daily at 08:00 and 20:00 UTC:
 
 ```cron
-0 8,20 * * * /home/pi/.local/bin/uv run --project /home/pi/k3s-monitoring k8s-monitor.py >> /home/pi/k3s-monitoring/k8s-monitor.log 2>&1
+0 8,20 * * * cd /home/pi/k3s-monitoring && PATH=/home/pi/.local/bin:/usr/local/bin:/usr/bin:/bin uv run k8s-monitor.py >> /home/pi/k3s-monitoring/k8s-monitor.log 2>&1
 ```
 
 ## Development
