@@ -1,5 +1,7 @@
 # k3s-health-monitor
 
+![CI status](https://github.com/teyhouse/k3s-health-monitor/actions/workflows/ci.yml/badge.svg)
+
 Automated Kubernetes (k3s) cluster health monitoring that posts a formatted report
 to a Discord channel via webhook. Cluster state is collected with `kubectl`,
 analyzed with Groq's free LLM API, and delivered as a Discord embed.
@@ -55,12 +57,25 @@ Runs twice daily at 08:00 and 20:00 UTC:
 0 8,20 * * * /home/pi/.local/bin/uv run --project /home/pi/k3s-monitoring k8s-monitor.py >> /home/pi/k3s-monitoring/k8s-monitor.log 2>&1
 ```
 
+## Development
+
+Lint and tests are run by a GitHub Actions workflow that triggers only when
+`k8s-monitor.py`, the tests, or the project configuration change:
+
+```sh
+uv run ruff check .        # lint
+uv run ruff format --check .   # formatting
+uv run pytest              # tests
+```
+
 ## Project layout
 
 ```
-pyproject.toml        uv project definition and dependencies
-k8s-monitor.py        main monitoring script
-.env.example          example configuration (copy to .env)
+pyproject.toml            uv project definition and dependencies
+k8s-monitor.py            main monitoring script
+tests/                    pytest test suite
+.github/workflows/ci.yml  CI pipeline (lint + tests)
+.env.example              example configuration (copy to .env)
 ```
 
 ## Notes

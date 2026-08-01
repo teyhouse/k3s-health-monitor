@@ -10,13 +10,13 @@ Cron example (twice daily at 08:00 and 20:00):
       k8s-monitor.py >> /home/pi/k3s-monitoring/k8s-monitor.log 2>&1
 """
 
+import json
+import os
 import subprocess
 import sys
-import os
-import json
-import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+import urllib.request
+from datetime import UTC, datetime
 
 from dotenv import load_dotenv
 
@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GROQ_API_KEY    = os.environ.get("GROQ_API_KEY",    "YOUR_GROQ_API_KEY_HERE")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "YOUR_GROQ_API_KEY_HERE")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "YOUR_DISCORD_WEBHOOK_URL_HERE")
 
 # Groq free tier — fast and free for small models.
@@ -40,13 +40,11 @@ DISCORD_COLORS = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def run_kubectl(args: list[str]) -> tuple[str, str]:
     """Run a kubectl command and return (stdout, stderr)."""
     try:
-        result = subprocess.run(
-            ["kubectl"] + args,
-            capture_output=True, text=True, timeout=30
-        )
+        result = subprocess.run(["kubectl"] + args, capture_output=True, text=True, timeout=30)
         return result.stdout.strip(), result.stderr.strip()
     except FileNotFoundError:
         return "", "kubectl not found. Is it installed and in PATH?"
@@ -86,22 +84,32 @@ def gather_cluster_state() -> dict:
     state["node_ready"] = node_ready
 
     # All pods across namespaces — filter to non-Running/Completed only
-    out, _ = run_kubectl([
-        "get", "pods", "--all-namespaces",
-        "--field-selector=status.phase!=Running,status.phase!=Succeeded"
-    ])
-    pod_lines = [l for l in out.splitlines() if l.strip()]
+    out, _ = run_kubectl(
+        [
+            "get",
+            "pods",
+            "--all-namespaces",
+            "--field-selector=status.phase!=Running,status.phase!=Succeeded",
+        ]
+    )
+    pod_lines = [line for line in out.splitlines() if line.strip()]
     state["non_running_pods"] = "\n".join(pod_lines) if pod_lines else "None"
     state["non_running_count"] = max(len(pod_lines) - 1, 0)
 
     # CrashLoopBackOff / Error pods (broader check)
-    out, _ = run_kubectl([
-        "get", "pods", "--all-namespaces", "-o",
-        "jsonpath={range .items[*]}{.metadata.namespace}{'\\t'}{.metadata.name}{'\\t'}"
-        "{range .status.containerStatuses[*]}{.state.waiting.reason}{'\\n'}{end}{end}"
-    ])
+    out, _ = run_kubectl(
+        [
+            "get",
+            "pods",
+            "--all-namespaces",
+            "-o",
+            "jsonpath={range .items[*]}{.metadata.namespace}{'\\t'}{.metadata.name}{'\\t'}"
+            "{range .status.containerStatuses[*]}{.state.waiting.reason}{'\\n'}{end}{end}",
+        ]
+    )
     crash_lines = [
-        line for line in out.splitlines()
+        line
+        for line in out.splitlines()
         if any(r in line for r in ["CrashLoopBackOff", "OOMKilled", "Error", "ImagePullBackOff"])
     ]
     state["crashlooping"] = "\n".join(crash_lines) if crash_lines else "None"
@@ -128,28 +136,35 @@ def gather_cluster_state() -> dict:
     state["failed_jobs_count"] = len(failed_jobs)
 
     # Pending pods
-    out, _ = run_kubectl([
-        "get", "pods", "--all-namespaces",
-        "--field-selector=status.phase=Pending"
-    ])
-    pending_lines = [l for l in out.splitlines() if l.strip()]
+    out, _ = run_kubectl(
+        ["get", "pods", "--all-namespaces", "--field-selector=status.phase=Pending"]
+    )
+    pending_lines = [line for line in out.splitlines() if line.strip()]
     state["pending_pods"] = "\n".join(pending_lines) if pending_lines else "None"
     state["pending_count"] = max(len(pending_lines) - 1, 0)
 
     # Recent events (warnings only, last 1h)
-    out, _ = run_kubectl([
-        "get", "events", "--all-namespaces",
-        "--field-selector=type=Warning",
-        "--sort-by=.lastTimestamp"
-    ])
+    out, _ = run_kubectl(
+        [
+            "get",
+            "events",
+            "--all-namespaces",
+            "--field-selector=type=Warning",
+            "--sort-by=.lastTimestamp",
+        ]
+    )
     # Trim to last 30 lines to keep the prompt short
     lines = out.splitlines()
     state["warning_events"] = "\n".join(lines[-30:]) if lines else "None"
-    state["warning_count"] = len([
-        l for l in lines
-        if l.strip() and not l.strip().startswith("NAMESPACE")
-        and "No resources" not in l
-    ])
+    state["warning_count"] = len(
+        [
+            line
+            for line in lines
+            if line.strip()
+            and not line.strip().startswith("NAMESPACE")
+            and "No resources" not in line
+        ]
+    )
 
     state["server_version"] = get_server_version()
 
@@ -161,24 +176,28 @@ def ask_groq(prompt: str) -> str:
     if not GROQ_API_KEY or GROQ_API_KEY == "YOUR_GROQ_API_KEY_HERE":
         return "⚠️  GROQ_API_KEY is not set. Cannot contact LLM."
 
-    payload = json.dumps({
-        "model": GROQ_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a Kubernetes SRE assistant. Analyze the provided cluster state "
-                    "and produce a concise health report. Be specific about namespaces, pod names, "
-                    "and job names. Do NOT suggest fixes unless explicitly asked — only report issues. "
-                    "Ignore everything related to Recent warnings for DNS config forming in kube-system namespace. "
-                    "Use bullet points. Keep it under 1500 characters so it fits in a Discord message."
-                )
-            },
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.2,
-        "max_tokens": 512,
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "model": GROQ_MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a Kubernetes SRE assistant. Analyze the provided cluster "
+                        "state and produce a concise health report. Be specific about "
+                        "namespaces, pod names, and job names. Do NOT suggest fixes unless "
+                        "explicitly asked — only report issues. Ignore everything related "
+                        "to Recent warnings for DNS config forming in kube-system namespace. "
+                        "Use bullet points. Keep it under 1500 characters so it fits in a "
+                        "Discord message."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 512,
+        }
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -190,7 +209,7 @@ def ask_groq(prompt: str) -> str:
             # Python's default urllib User-Agent triggers a 403/1010 error.
             "User-Agent": "k8s-monitor/1.0",
         },
-        method="POST"
+        method="POST",
     )
 
     try:
@@ -218,7 +237,7 @@ def send_discord_embed(embed: dict) -> None:
             "Content-Type": "application/json",
             "User-Agent": "k8s-monitor/1.0",
         },
-        method="POST"
+        method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -236,9 +255,13 @@ def footer_text(now: str, state: dict) -> str:
 
 
 def build_summary_fields(state: dict) -> list:
-    """Build Discord embed summary fields from the collected state counts."""
+    """Build Discord embed summary fields from collected state counts."""
     return [
-        {"name": "🖥️ Nodes", "value": f"{state['node_ready']}/{state['node_total']} Ready", "inline": True},
+        {
+            "name": "🖥️ Nodes",
+            "value": f"{state['node_ready']}/{state['node_total']} Ready",
+            "inline": True,
+        },
         {"name": "📦 Non-Running Pods", "value": str(state["non_running_count"]), "inline": True},
         {"name": "🔄 CrashLoops", "value": str(state["crashloop_count"]), "inline": True},
         {"name": "🚫 Failed Jobs", "value": str(state["failed_jobs_count"]), "inline": True},
@@ -257,8 +280,9 @@ def has_issues(state: dict) -> bool:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main():
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     print(f"[{now}] Starting Kubernetes health check...")
 
     state = gather_cluster_state()
@@ -266,32 +290,36 @@ def main():
     # If kubectl itself failed, we can't trust the "healthy" signal — alert instead.
     if not state["kubectl_ok"]:
         print("❌  kubectl failed. Sending error report to Discord...")
-        send_discord_embed({
-            "title": "⚠️ K8s Health Check — Could Not Run",
-            "description": (
-                "**The health check could not collect cluster state.**\n\n"
-                f"```\n{state['nodes']}\n```"
-            ),
-            "color": DISCORD_COLORS["amber"],
-            "footer": {"text": footer_text(now, state)},
-        })
+        send_discord_embed(
+            {
+                "title": "⚠️ K8s Health Check — Could Not Run",
+                "description": (
+                    "**The health check could not collect cluster state.**\n\n"
+                    f"```\n{state['nodes']}\n```"
+                ),
+                "color": DISCORD_COLORS["amber"],
+                "footer": {"text": footer_text(now, state)},
+            }
+        )
         print("Done.")
         return
 
     # No issues found — post a nice green "all good" report instead of skipping.
     if not has_issues(state):
         print("✅  No issues detected. Sending healthy report to Discord...")
-        send_discord_embed({
-            "title": "✅ K8s Health Check",
-            "description": (
-                "**Status: All Systems Nominal**\n"
-                "🟢 No cluster health issues detected.\n"
-                "Health check completed successfully."
-            ),
-            "color": DISCORD_COLORS["green"],
-            "fields": build_summary_fields(state),
-            "footer": {"text": footer_text(now, state)},
-        })
+        send_discord_embed(
+            {
+                "title": "✅ K8s Health Check",
+                "description": (
+                    "**Status: All Systems Nominal**\n"
+                    "🟢 No cluster health issues detected.\n"
+                    "Health check completed successfully."
+                ),
+                "color": DISCORD_COLORS["green"],
+                "fields": build_summary_fields(state),
+                "footer": {"text": footer_text(now, state)},
+            }
+        )
         print("Done.")
         return
 
@@ -299,22 +327,22 @@ def main():
     prompt = f"""Kubernetes cluster state as of {now}:
 
 ## Nodes
-{state['nodes']}
+{state["nodes"]}
 
 ## Non-Running / Non-Completed Pods
-{state['non_running_pods']}
+{state["non_running_pods"]}
 
 ## CrashLooping / Error Containers
-{state['crashlooping']}
+{state["crashlooping"]}
 
 ## Failed Jobs
-{state['failed_jobs']}
+{state["failed_jobs"]}
 
 ## Pending Pods
-{state['pending_pods']}
+{state["pending_pods"]}
 
 ## Recent Warning Events (last 30)
-{state['warning_events']}
+{state["warning_events"]}
 
 Summarize any issues found. If everything looks healthy, say so briefly.
 """
@@ -323,17 +351,17 @@ Summarize any issues found. If everything looks healthy, say so briefly.
     analysis = ask_groq(prompt)
 
     print("Sending report to Discord...")
-    send_discord_embed({
-        "title": "🔴 K8s Health Report — Issues Found",
-        "description": (
-            f"**Cluster issues detected** as of {now}\n"
-            f"Model: `{GROQ_MODEL}`\n\n"
-            f"{analysis}"
-        ),
-        "color": DISCORD_COLORS["red"],
-        "fields": build_summary_fields(state),
-        "footer": {"text": footer_text(now, state)},
-    })
+    send_discord_embed(
+        {
+            "title": "🔴 K8s Health Report — Issues Found",
+            "description": (
+                f"**Cluster issues detected** as of {now}\nModel: `{GROQ_MODEL}`\n\n{analysis}"
+            ),
+            "color": DISCORD_COLORS["red"],
+            "fields": build_summary_fields(state),
+            "footer": {"text": footer_text(now, state)},
+        }
+    )
     print("Done.")
 
 
