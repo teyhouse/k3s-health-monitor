@@ -28,6 +28,8 @@ HEALTHY_STATE = {
     "warning_count": 0,
     "velero_failed_backups": "None",
     "velero_failed_count": 0,
+    "expired_certs": "None",
+    "expired_cert_count": 0,
     "server_version": "v1.36.2+k3s1",
 }
 
@@ -72,6 +74,62 @@ def fake_velero(args, now=None):
     return json.dumps(backups), ""
 
 
+def fake_certs(args, now=None):
+    """Simulate cert-manager Certificate output: expired, expiring, healthy, not-ready."""
+    from datetime import UTC, datetime, timedelta
+
+    now = now or datetime.now(UTC)
+
+    def iso(dt):
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    certs = {
+        "items": [
+            {
+                "metadata": {"namespace": "istio-system", "name": "expired-cert"},
+                "status": {
+                    "notAfter": iso(now - timedelta(days=10)),
+                    "conditions": [
+                        {"type": "Ready", "status": "False", "message": "Certificate has expired"}
+                    ],
+                },
+            },
+            {
+                "metadata": {"namespace": "default", "name": "expiring-soon"},
+                "status": {
+                    "notAfter": iso(now + timedelta(days=3)),
+                    "conditions": [
+                        {"type": "Ready", "status": "True", "message": "Certificate is up to date"}
+                    ],
+                },
+            },
+            {
+                "metadata": {"namespace": "kube-system", "name": "healthy-cert"},
+                "status": {
+                    "notAfter": iso(now + timedelta(days=60)),
+                    "conditions": [
+                        {"type": "Ready", "status": "True", "message": "Certificate is up to date"}
+                    ],
+                },
+            },
+            {
+                "metadata": {"namespace": "default", "name": "not-ready-cert"},
+                "status": {
+                    "notAfter": iso(now + timedelta(days=30)),
+                    "conditions": [
+                        {
+                            "type": "Ready",
+                            "status": "False",
+                            "message": "Issuing certificate as secret does not exist",
+                        }
+                    ],
+                },
+            },
+        ]
+    }
+    return json.dumps(certs), ""
+
+
 def fake_kubectl(args):
     """Simulate kubectl output for the commands gather_cluster_state() runs."""
     joined = " ".join(args)
@@ -93,6 +151,8 @@ def fake_kubectl(args):
             ]
         }
         return json.dumps(jobs), ""
+    if "certificates.cert-manager.io" in joined:
+        return fake_certs(args)
     if "get events" in joined:
         return (
             "NAMESPACE LAST SEEN TYPE REASON OBJECT MESSAGE\n"
@@ -131,6 +191,12 @@ def test_has_issues_detects_failed_backups():
     assert reporting.has_issues(state) is True
 
 
+def test_has_issues_detects_expired_certs():
+    state = dict(HEALTHY_STATE)
+    state["expired_certs"] = "istio-system\texpired-cert\tEXPIRED 2026-07-22T00:00:00Z"
+    assert reporting.has_issues(state) is True
+
+
 # ── footer_text ─────────────────────────────────────────────────────────────
 
 
@@ -149,13 +215,14 @@ def test_footer_text_omits_version_when_unavailable():
 
 def test_build_summary_fields():
     fields = reporting.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 7
+    assert len(fields) == 8
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
     assert by_name["📦 Non-Running Pods"] == "0"
     assert by_name["⚠️ Warnings (1h)"] == "0"
     assert by_name["🛟 Failed Backups (24h)"] == "0"
+    assert by_name["🔏 Cert Issues"] == "0"
 
 
 # ── get_server_version ──────────────────────────────────────────────────────
@@ -197,6 +264,7 @@ def test_gather_cluster_state_counts(monkeypatch):
     assert state["pending_count"] == 1
     assert state["warning_count"] == 2
     assert state["velero_failed_count"] == 0
+    assert state["expired_cert_count"] == 3
     assert state["server_version"] == "v1.36.2+k3s1"
 
 
@@ -326,6 +394,49 @@ def test_gather_velero_backups_invalid_json(monkeypatch):
     assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}
 
 
+# ── cert-manager certificates ───────────────────────────────────────────────
+
+
+def test_gather_expired_certs_counts_expired_and_expiring(monkeypatch):
+    monkeypatch.setattr(config, "CERT_CHECK_ENABLED", True)
+    monkeypatch.setattr(kube, "run_kubectl", fake_certs)
+    result = kube.gather_expired_certs()
+
+    # expired-cert (EXPIRED) + expiring-soon (EXPIRES in 3d) + not-ready-cert (NOT READY)
+    assert result["expired_cert_count"] == 3
+    assert "expired-cert" in result["expired_certs"]
+    assert "EXPIRED" in result["expired_certs"]
+    assert "expiring-soon" in result["expired_certs"]
+    assert "EXPIRES in" in result["expired_certs"]
+    assert "healthy-cert" not in result["expired_certs"]
+    assert "not-ready-cert" in result["expired_certs"]
+    assert "NOT READY" in result["expired_certs"]
+
+
+def test_gather_expired_certs_disabled_skips_call(monkeypatch):
+    monkeypatch.setattr(config, "CERT_CHECK_ENABLED", False)
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: pytest.fail("kubectl must not be called"))
+    result = kube.gather_expired_certs()
+
+    assert result == {"expired_certs": "None", "expired_cert_count": 0}
+
+
+def test_gather_expired_certs_empty_output(monkeypatch):
+    monkeypatch.setattr(config, "CERT_CHECK_ENABLED", True)
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: ("", ""))
+    result = kube.gather_expired_certs()
+
+    assert result == {"expired_certs": "None", "expired_cert_count": 0}
+
+
+def test_gather_expired_certs_invalid_json(monkeypatch):
+    monkeypatch.setattr(config, "CERT_CHECK_ENABLED", True)
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: ("not json", ""))
+    result = kube.gather_expired_certs()
+
+    assert result == {"expired_certs": "None", "expired_cert_count": 0}
+
+
 # ── ask_groq ────────────────────────────────────────────────────────────────
 
 
@@ -409,6 +520,30 @@ def test_main_posts_red_embed_when_backups_fail(monkeypatch):
 
     assert prompts, "LLM should be called when backups fail"
     assert "## Velero Backups" in prompts[0]
+    assert len(sent) == 1
+    embed = sent[0]
+    assert embed["title"] == "🔴 K8s Health Report — Issues Found"
+    assert embed["color"] == config.DISCORD_COLORS["red"]
+
+
+def test_main_posts_red_embed_when_certs_expired(monkeypatch):
+    state = dict(HEALTHY_STATE)
+    state["expired_certs"] = "istio-system\texpired-cert\tEXPIRED 2026-07-22T00:00:00Z"
+    state["expired_cert_count"] = 1
+    monkeypatch.setattr(kube, "gather_cluster_state", lambda: state)
+    prompts = []
+    monkeypatch.setattr(
+        groq,
+        "ask_groq",
+        lambda prompt: prompts.append(prompt) or "- certificate expired",
+    )
+    sent = []
+    monkeypatch.setattr(discord_client, "send_discord_embed", sent.append)
+
+    orchestrate.run()
+
+    assert prompts, "LLM should be called when certs expired"
+    assert "## Expired / Expiring Certificates" in prompts[0]
     assert len(sent) == 1
     embed = sent[0]
     assert embed["title"] == "🔴 K8s Health Report — Issues Found"

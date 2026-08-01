@@ -72,6 +72,62 @@ def gather_velero_backups() -> dict:
     }
 
 
+def gather_expired_certs() -> dict:
+    """Collect expired, soon-to-expire, and not-ready cert-manager certificates."""
+    if not config.CERT_CHECK_ENABLED:
+        return {"expired_certs": "None", "expired_cert_count": 0}
+
+    out, _ = run_kubectl(["get", "certificates.cert-manager.io", "--all-namespaces", "-o", "json"])
+    if not out:
+        return {"expired_certs": "None", "expired_cert_count": 0}
+
+    try:
+        cert_data = json.loads(out)
+    except json.JSONDecodeError:
+        print("⚠️  Failed to parse certificates JSON", file=sys.stderr)
+        return {"expired_certs": "None", "expired_cert_count": 0}
+
+    now = datetime.now(UTC)
+    threshold = now + timedelta(days=config.CERT_EXPIRY_WARNING_DAYS)
+    flagged = []
+    for cert in cert_data.get("items", []):
+        ns = cert["metadata"]["namespace"]
+        name = cert["metadata"]["name"]
+        status = cert.get("status", {})
+        already_flagged = False
+
+        not_after = status.get("notAfter", "")
+        if not_after:
+            try:
+                expiry = datetime.fromisoformat(not_after.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if expiry < now:
+                flagged.append(f"{ns}\t{name}\tEXPIRED {not_after}")
+                already_flagged = True
+            elif expiry < threshold:
+                days_left = (expiry - now).days
+                flagged.append(f"{ns}\t{name}\tEXPIRES in {days_left}d ({not_after})")
+                already_flagged = True
+
+        # Also flag certs with Ready=False — catches renewal failures and
+        # never-issued certs even before notAfter is reached. Skip if already
+        # flagged by the expiry check above to avoid duplicates.
+        if already_flagged:
+            continue
+        for cond in status.get("conditions", []):
+            if cond.get("type") == "Ready" and cond.get("status") == "False":
+                msg = cond.get("message", "unknown reason")
+                if len(msg) > 100:
+                    msg = msg[:100] + "…"
+                flagged.append(f"{ns}\t{name}\tNOT READY: {msg}")
+
+    return {
+        "expired_certs": "\n".join(flagged) if flagged else "None",
+        "expired_cert_count": len(flagged),
+    }
+
+
 def gather_cluster_state() -> dict:
     """Collect the relevant cluster state for analysis."""
     state = {}
@@ -176,6 +232,9 @@ def gather_cluster_state() -> dict:
 
     # Failed Velero backups (last 24h)
     state.update(gather_velero_backups())
+
+    # Expired / expiring cert-manager certificates
+    state.update(gather_expired_certs())
 
     state["server_version"] = get_server_version()
 

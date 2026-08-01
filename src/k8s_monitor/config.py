@@ -32,3 +32,13 @@ VELERO_CHECK_ENABLED = os.environ.get("VELERO_CHECK_ENABLED", "true").strip().lo
 }
 # Only inspect backups created within this window (hours).
 VELERO_LOOKBACK_HOURS = 24
+
+# Cert-manager certificate check — enabled by default, disable with CERT_CHECK_ENABLED=false.
+CERT_CHECK_ENABLED = os.environ.get("CERT_CHECK_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+# Flag certificates expiring within this many days.
+CERT_EXPIRY_WARNING_DAYS = 7

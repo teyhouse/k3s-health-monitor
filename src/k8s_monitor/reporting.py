@@ -23,6 +23,11 @@ def build_summary_fields(state: dict) -> list:
             "value": str(state["velero_failed_count"]),
             "inline": True,
         },
+        {
+            "name": "🔏 Cert Issues",
+            "value": str(state["expired_cert_count"]),
+            "inline": True,
+        },
     ]
 
 
@@ -34,6 +39,7 @@ def has_issues(state: dict) -> bool:
         "failed_jobs",
         "pending_pods",
         "velero_failed_backups",
+        "expired_certs",
     ]
     for key in keys:
         if state.get(key, "None") not in ("None", ""):
@@ -62,6 +68,9 @@ def build_prompt(state: dict, now: str) -> str:
 
 ## Velero Backups (last 24h)
 {state["velero_failed_backups"]}
+
+## Expired / Expiring Certificates
+{state["expired_certs"]}
 
 ## Recent Warning Events (last 30)
 {state["warning_events"]}
