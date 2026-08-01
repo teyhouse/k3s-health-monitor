@@ -16,7 +16,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from dotenv import load_dotenv
 
@@ -43,6 +43,16 @@ DISCORD_COLORS = {
 # See kubernetes/kubernetes#126585 (no upstream suppress flag yet).
 WARNING_FILTER = {"DNSConfigForming"}
 
+# Velero backup check — enabled by default, disable with VELERO_CHECK_ENABLED=false.
+VELERO_CHECK_ENABLED = os.environ.get("VELERO_CHECK_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+# Only inspect backups created within this window (hours).
+VELERO_LOOKBACK_HOURS = 24
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -63,6 +73,17 @@ def run_kubectl(args: list[str]) -> tuple[str, str]:
         return "", f"kubectl {' '.join(args)} timed out after 30s"
 
 
+def run_velero(args: list[str]) -> tuple[str, str]:
+    """Run a velero command and return (stdout, stderr)."""
+    try:
+        result = subprocess.run(["velero"] + args, capture_output=True, text=True, timeout=30)
+        return result.stdout.strip(), result.stderr.strip()
+    except FileNotFoundError:
+        return "", "velero not found. Is it installed and in PATH?"
+    except subprocess.TimeoutExpired:
+        return "", f"velero {' '.join(args)} timed out after 30s"
+
+
 def get_server_version() -> str:
     """Return the k8s/k3s server version (e.g. 'v1.36.2+k3s1') or '' if unavailable."""
     out, _ = run_kubectl(["version", "--output=json"])
@@ -72,6 +93,45 @@ def get_server_version() -> str:
         return json.loads(out).get("serverVersion", {}).get("gitVersion", "")
     except json.JSONDecodeError:
         return ""
+
+
+def gather_velero_backups() -> dict:
+    """Collect failed Velero backups created in the last VELERO_LOOKBACK_HOURS."""
+    if not VELERO_CHECK_ENABLED:
+        return {"velero_failed_backups": "None", "velero_failed_count": 0}
+
+    out, _ = run_velero(["get", "backups", "-o", "json"])
+    if not out:
+        return {"velero_failed_backups": "None", "velero_failed_count": 0}
+
+    try:
+        backup_data = json.loads(out)
+    except json.JSONDecodeError:
+        print("⚠️  Failed to parse velero backups JSON", file=sys.stderr)
+        return {"velero_failed_backups": "None", "velero_failed_count": 0}
+
+    cutoff = datetime.now(UTC) - timedelta(hours=VELERO_LOOKBACK_HOURS)
+    failed = []
+    for backup in backup_data.get("items", []):
+        created = backup.get("metadata", {}).get("creationTimestamp", "")
+        try:
+            created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if created_dt < cutoff:
+            continue
+        if backup.get("status", {}).get("phase") != "Failed":
+            continue
+        name = backup["metadata"]["name"]
+        reason = backup.get("status", {}).get("failureReason", "unknown reason") or "unknown reason"
+        if len(reason) > 140:
+            reason = reason[:140] + "…"
+        failed.append(f"{name}\t{reason}")
+
+    return {
+        "velero_failed_backups": "\n".join(failed) if failed else "None",
+        "velero_failed_count": len(failed),
+    }
 
 
 def gather_cluster_state() -> dict:
@@ -176,6 +236,9 @@ def gather_cluster_state() -> dict:
     state["warning_events"] = "\n".join(warning_lines[-30:]) if warning_lines else "None"
     state["warning_count"] = len(warning_lines)
 
+    # Failed Velero backups (last 24h)
+    state.update(gather_velero_backups())
+
     state["server_version"] = get_server_version()
 
     return state
@@ -277,12 +340,24 @@ def build_summary_fields(state: dict) -> list:
         {"name": "🚫 Failed Jobs", "value": str(state["failed_jobs_count"]), "inline": True},
         {"name": "⏳ Pending Pods", "value": str(state["pending_count"]), "inline": True},
         {"name": "⚠️ Warnings (1h)", "value": str(state["warning_count"]), "inline": True},
+        {
+            "name": "🛟 Failed Backups (24h)",
+            "value": str(state["velero_failed_count"]),
+            "inline": True,
+        },
     ]
 
 
 def has_issues(state: dict) -> bool:
     """Quick check: are there any obvious problems worth reporting?"""
-    for key in ["non_running_pods", "crashlooping", "failed_jobs", "pending_pods"]:
+    keys = [
+        "non_running_pods",
+        "crashlooping",
+        "failed_jobs",
+        "pending_pods",
+        "velero_failed_backups",
+    ]
+    for key in keys:
         if state.get(key, "None") not in ("None", ""):
             return True
     return False
@@ -350,6 +425,9 @@ def main():
 
 ## Pending Pods
 {state["pending_pods"]}
+
+## Velero Backups (last 24h)
+{state["velero_failed_backups"]}
 
 ## Recent Warning Events (last 30)
 {state["warning_events"]}

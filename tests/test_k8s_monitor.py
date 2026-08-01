@@ -17,8 +17,50 @@ HEALTHY_STATE = {
     "pending_count": 0,
     "warning_events": "None",
     "warning_count": 0,
+    "velero_failed_backups": "None",
+    "velero_failed_count": 0,
     "server_version": "v1.36.2+k3s1",
 }
+
+
+def fake_velero(args, now=None):
+    """Simulate velero output with a mix of recent/old and failed/completed backups."""
+    from datetime import UTC, datetime, timedelta
+
+    now = now or datetime.now(UTC)
+
+    def iso(dt):
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    backups = {
+        "items": [
+            {
+                "metadata": {
+                    "name": "daily-app-recent",
+                    "creationTimestamp": iso(now - timedelta(hours=2)),
+                },
+                "status": {
+                    "phase": "Failed",
+                    "failureReason": "error putting object: Header 'x-amz-tagging' not implemented",
+                },
+            },
+            {
+                "metadata": {
+                    "name": "test-backup-recent",
+                    "creationTimestamp": iso(now - timedelta(hours=1)),
+                },
+                "status": {"phase": "Completed", "failureReason": None},
+            },
+            {
+                "metadata": {
+                    "name": "daily-app-old",
+                    "creationTimestamp": iso(now - timedelta(hours=48)),
+                },
+                "status": {"phase": "Failed", "failureReason": "old failure"},
+            },
+        ]
+    }
+    return json.dumps(backups), ""
 
 
 def fake_kubectl(args):
@@ -74,6 +116,12 @@ def test_has_issues_detects_problems(km):
     assert km.has_issues(state) is True
 
 
+def test_has_issues_detects_failed_backups(km):
+    state = dict(HEALTHY_STATE)
+    state["velero_failed_backups"] = "daily-app\terror putting object"
+    assert km.has_issues(state) is True
+
+
 # ── footer_text ─────────────────────────────────────────────────────────────
 
 
@@ -92,12 +140,13 @@ def test_footer_text_omits_version_when_unavailable(km):
 
 def test_build_summary_fields(km):
     fields = km.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 6
+    assert len(fields) == 7
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
     assert by_name["📦 Non-Running Pods"] == "0"
     assert by_name["⚠️ Warnings (1h)"] == "0"
+    assert by_name["🛟 Failed Backups (24h)"] == "0"
 
 
 # ── get_server_version ──────────────────────────────────────────────────────
@@ -127,6 +176,7 @@ def test_get_server_version_returns_empty_on_invalid_json(km, monkeypatch):
 
 def test_gather_cluster_state_counts(km, monkeypatch):
     monkeypatch.setattr(km, "run_kubectl", fake_kubectl)
+    monkeypatch.setattr(km, "run_velero", lambda args: ("", ""))
     state = km.gather_cluster_state()
 
     assert state["kubectl_ok"] is True
@@ -137,11 +187,13 @@ def test_gather_cluster_state_counts(km, monkeypatch):
     assert state["failed_jobs_count"] == 1
     assert state["pending_count"] == 1
     assert state["warning_count"] == 2
+    assert state["velero_failed_count"] == 0
     assert state["server_version"] == "v1.36.2+k3s1"
 
 
 def test_gather_cluster_state_healthy_outputs(km, monkeypatch):
     monkeypatch.setattr(km, "run_kubectl", lambda args: ("", ""))
+    monkeypatch.setattr(km, "run_velero", lambda args: ("", ""))
     state = km.gather_cluster_state()
 
     assert state["kubectl_ok"] is False
@@ -216,6 +268,55 @@ def test_run_kubectl_timeout(km, monkeypatch):
     assert "timed out" in err
 
 
+# ── velero ──────────────────────────────────────────────────────────────────
+
+
+def test_run_velero_file_not_found(km, monkeypatch):
+    def boom(args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(km.subprocess, "run", boom)
+    out, err = km.run_velero(["get", "backups"])
+    assert out == ""
+    assert "velero not found" in err
+
+
+def test_gather_velero_backups_counts_recent_failures_only(km, monkeypatch):
+    monkeypatch.setattr(km, "VELERO_CHECK_ENABLED", True)
+    monkeypatch.setattr(km, "run_velero", fake_velero)
+    result = km.gather_velero_backups()
+
+    assert result["velero_failed_count"] == 1
+    assert "daily-app-recent" in result["velero_failed_backups"]
+    assert "daily-app-old" not in result["velero_failed_backups"]
+    assert "test-backup-recent" not in result["velero_failed_backups"]
+    assert "x-amz-tagging" in result["velero_failed_backups"]
+
+
+def test_gather_velero_backups_disabled_skips_call(km, monkeypatch):
+    monkeypatch.setattr(km, "VELERO_CHECK_ENABLED", False)
+    monkeypatch.setattr(km, "run_velero", lambda args: pytest.fail("velero must not be called"))
+    result = km.gather_velero_backups()
+
+    assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}
+
+
+def test_gather_velero_backups_empty_output(km, monkeypatch):
+    monkeypatch.setattr(km, "VELERO_CHECK_ENABLED", True)
+    monkeypatch.setattr(km, "run_velero", lambda args: ("", ""))
+    result = km.gather_velero_backups()
+
+    assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}
+
+
+def test_gather_velero_backups_invalid_json(km, monkeypatch):
+    monkeypatch.setattr(km, "VELERO_CHECK_ENABLED", True)
+    monkeypatch.setattr(km, "run_velero", lambda args: ("not json", ""))
+    result = km.gather_velero_backups()
+
+    assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}
+
+
 # ── ask_groq ────────────────────────────────────────────────────────────────
 
 
@@ -277,6 +378,32 @@ def test_main_posts_red_embed_when_issues_found(km, monkeypatch):
     assert embed["title"] == "🔴 K8s Health Report — Issues Found"
     assert embed["color"] == km.DISCORD_COLORS["red"]
     assert "- pod-2 unschedulable" in embed["description"]
+
+
+def test_main_posts_red_embed_when_backups_fail(km, monkeypatch):
+    state = dict(HEALTHY_STATE)
+    state["velero_failed_backups"] = (
+        "daily-app\terror putting object: x-amz-tagging not implemented"
+    )
+    state["velero_failed_count"] = 1
+    monkeypatch.setattr(km, "gather_cluster_state", lambda: state)
+    prompts = []
+    monkeypatch.setattr(
+        km,
+        "ask_groq",
+        lambda prompt: prompts.append(prompt) or "- backups failing",
+    )
+    sent = []
+    monkeypatch.setattr(km, "send_discord_embed", sent.append)
+
+    km.main()
+
+    assert prompts, "LLM should be called when backups fail"
+    assert "## Velero Backups" in prompts[0]
+    assert len(sent) == 1
+    embed = sent[0]
+    assert embed["title"] == "🔴 K8s Health Report — Issues Found"
+    assert embed["color"] == km.DISCORD_COLORS["red"]
 
 
 def test_main_posts_amber_embed_when_kubectl_fails(km, monkeypatch):

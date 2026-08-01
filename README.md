@@ -12,9 +12,10 @@ Every run always posts exactly one report:
 
 - **Healthy** — green embed. No LLM call is made; a static report with live
   summary stats (nodes ready, non-running pods, crashloops, failed jobs, pending
-  pods, recent warning events) is posted.
+  pods, failed Velero backups in the last 24h, recent warning events) is posted.
 - **Issues found** — red embed with an LLM-generated analysis of the collected
-  cluster state plus the same summary stats.
+  cluster state plus the same summary stats. Failed Velero backups count as an
+  issue and trigger this report.
 - **`kubectl` failure** — amber embed. The run cannot collect state and is
   reported as such rather than falsely reported as healthy.
 
@@ -25,6 +26,7 @@ The k8s/k3s server version is shown in the embed footer.
 - Python >= 3.13
 - [uv](https://docs.astral.sh/uv/)
 - `kubectl` configured with access to the target cluster
+- `velero` CLI (for the backup check; only required when `VELERO_CHECK_ENABLED=true`)
 
 ## Setup
 
@@ -40,6 +42,7 @@ precedence):
 | ----------------- | ---------------------------------- |
 | `GROQ_API_KEY`    | Groq API key for the LLM analysis  |
 | `DISCORD_WEBHOOK` | Discord webhook URL for the reports|
+| `VELERO_CHECK_ENABLED` | Enable the Velero backup check (default `true`). Set to `false` to disable |
 
 `.env` is git-ignored and must never be committed.
 
