@@ -5,10 +5,27 @@ build-backend = "hatchling.build"
 [project]
 name = "k3s-monitoring"
 version = "0.1.0"
+description = "Automated k3s cluster health monitoring with Groq LLM analysis and Discord reports"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "teyhouse" }]
+keywords = ["kubernetes", "k3s", "monitoring", "discord", "groq", "velero", "cert-manager"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Monitoring",
+]
 requires-python = ">=3.13"
 dependencies = [
     "python-dotenv>=1.2.2",
 ]
+
+[project.scripts]
+k8s-monitor = "k8s_monitor.orchestrate:run"
 
 [dependency-groups]
 dev = [

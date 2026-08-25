@@ -198,7 +198,7 @@ def gather_cluster_state() -> dict:
     crash_lines = [
         line
         for line in out.splitlines()
-        if any(r in line for r in ["CrashLoopBackOff", "OOMKilled", "Error", "ImagePullBackOff"])
+        if line.split("\t")[-1] in {"CrashLoopBackOff", "OOMKilled", "Error", "ImagePullBackOff"}
     ]
     state["crashlooping"] = "\n".join(crash_lines) if crash_lines else "None"
     state["crashloop_count"] = len(crash_lines)

@@ -1,6 +1,9 @@
 # k3s-health-monitor
 
-![CI status](https://github.com/teyhouse/k3s-health-monitor/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/teyhouse/k3s-health-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/teyhouse/k3s-health-monitor/actions/workflows/ci.yml)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](pyproject.toml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Automated Kubernetes (k3s) cluster health monitoring that posts a formatted report
 to a Discord channel via webhook. Cluster state is collected with `kubectl`,
@@ -40,19 +43,30 @@ cp .env.example .env   # then fill in real values
 Configuration is read from `.env` (or real environment variables, which take
 precedence):
 
-| Variable          | Description                        |
-| ----------------- | ---------------------------------- |
-| `GROQ_API_KEY`    | Groq API key for the LLM analysis  |
-| `DISCORD_WEBHOOK` | Discord webhook URL for the reports|
-| `VELERO_CHECK_ENABLED` | Enable the Velero backup check (default `true`). Set to `false` to disable |
-| `CERT_CHECK_ENABLED` | Enable the cert-manager certificate check (default `true`). Set to `false` to disable |
+| Variable                   | Description                        | Default                        |
+| -------------------------- | ---------------------------------- | ------------------------------ |
+| `GROQ_API_KEY`             | Groq API key for the LLM analysis  | — (required for issue reports) |
+| `DISCORD_WEBHOOK`          | Discord webhook URL for the reports| — (required)                   |
+| `GROQ_MODEL`               | Groq model used for the analysis   | `llama-3.3-70b-versatile`      |
+| `VELERO_CHECK_ENABLED`     | Enable the Velero backup check     | `true`                         |
+| `VELERO_LOOKBACK_HOURS`    | How far back to scan for failed backups (hours) | `24`              |
+| `CERT_CHECK_ENABLED`       | Enable the cert-manager certificate check | `true`                  |
+| `CERT_EXPIRY_WARNING_DAYS` | Warn on certificates expiring within this many days | `7`           |
 
 `.env` is git-ignored and must never be committed.
+
+## Privacy
+
+When issues are detected, collected cluster state (node and pod names,
+namespaces, warning events, job names, backup/certificate details) is sent to
+Groq's cloud LLM API for analysis. Only use this tool with clusters whose
+metadata you are comfortable sharing with a third-party service. Healthy runs
+make no external calls other than posting to your Discord webhook.
 
 ## Usage
 
 ```sh
-uv run k8s-monitor.py
+uv run k8s-monitor.py    # or: uv run k8s-monitor
 ```
 
 ## Cron
@@ -60,7 +74,7 @@ uv run k8s-monitor.py
 Runs twice daily at 08:00 and 20:00 UTC:
 
 ```cron
-0 8,20 * * * cd /home/pi/k3s-monitoring && PATH=/home/pi/.local/bin:/usr/local/bin:/usr/bin:/bin uv run k8s-monitor.py >> /home/pi/k3s-monitoring/k8s-monitor.log 2>&1
+0 8,20 * * * cd /path/to/k3s-health-monitor && PATH=/usr/local/bin:/usr/bin:/bin uv run k8s-monitor.py >> /path/to/k3s-health-monitor/k8s-monitor.log 2>&1
 ```
 
 ## Development
@@ -95,6 +109,7 @@ tests/                          pytest test suite
 
 ## Notes
 
-- The LLM model is set via `GROQ_MODEL` in the script; it defaults to
-  `llama-3.3-70b-versatile`.
-- Discord embed colors and summary field labels are defined in the script.
+- The LLM model defaults to `llama-3.3-70b-versatile` and can be changed via
+  the `GROQ_MODEL` environment variable.
+- Discord embed colors and summary field labels are defined in
+  `src/k8s_monitor/config.py`.

@@ -1,15 +1,9 @@
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from k8s_monitor import config, discord_client, groq, kube, orchestrate, reporting  # noqa: E402
-from utils import shell  # noqa: E402
+from k8s_monitor import config, discord_client, groq, kube, orchestrate, reporting
+from utils import shell
 
 HEALTHY_STATE = {
     "nodes": "NAME STATUS ROLES\nnode1 Ready control-plane",
