@@ -26,6 +26,9 @@ HEALTHY_STATE = {
     "expired_cert_count": 0,
     "node_pressure": "None",
     "node_pressure_count": 0,
+    "externaldns_ok": True,
+    "externaldns_status": "None",
+    "externaldns_resolved": "192.168.10.2",
     "server_version": "v1.36.2+k3s1",
 }
 
@@ -205,6 +208,14 @@ def test_has_issues_detects_node_pressure():
     assert reporting.has_issues(state) is True
 
 
+def test_has_issues_detects_externaldns_failure():
+    state = dict(HEALTHY_STATE)
+    state["externaldns_status"] = (
+        "auth.fulda-cloud.com via 192.168.237.99 resolved to 195.201.217.35, expected 192.168.10.2"
+    )
+    assert reporting.has_issues(state) is True
+
+
 # ── footer_text ─────────────────────────────────────────────────────────────
 
 
@@ -223,7 +234,7 @@ def test_footer_text_omits_version_when_unavailable():
 
 def test_build_summary_fields():
     fields = reporting.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 9
+    assert len(fields) == 10
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
@@ -232,6 +243,14 @@ def test_build_summary_fields():
     assert by_name["🛟 Failed Backups (24h)"] == "0"
     assert by_name["🔏 Cert Issues"] == "0"
     assert by_name["💾 Node Pressure"] == "0"
+    assert by_name["🌐 ExternalDNS-Health"] == "✅ OK"
+
+
+def test_build_summary_fields_externaldns_failure():
+    state = dict(HEALTHY_STATE, externaldns_ok=False, externaldns_resolved="195.201.217.35")
+    fields = reporting.build_summary_fields(state)
+    by_name = {field["name"]: field["value"] for field in fields}
+    assert by_name["🌐 ExternalDNS-Health"] == "❌ FAIL (195.201.217.35)"
 
 
 # ── get_server_version ──────────────────────────────────────────────────────
@@ -262,6 +281,7 @@ def test_get_server_version_returns_empty_on_invalid_json(monkeypatch):
 def test_gather_cluster_state_counts(monkeypatch):
     monkeypatch.setattr(kube, "run_kubectl", fake_kubectl)
     monkeypatch.setattr(kube, "run_velero", lambda args: ("", ""))
+    monkeypatch.setattr(kube, "run_dig", lambda args: ("192.168.10.2\n", ""))
     state = kube.gather_cluster_state()
 
     assert state["kubectl_ok"] is True
@@ -275,12 +295,14 @@ def test_gather_cluster_state_counts(monkeypatch):
     assert state["velero_failed_count"] == 0
     assert state["expired_cert_count"] == 3
     assert state["node_pressure_count"] == 0
+    assert state["externaldns_ok"] is True
     assert state["server_version"] == "v1.36.2+k3s1"
 
 
 def test_gather_cluster_state_healthy_outputs(monkeypatch):
     monkeypatch.setattr(kube, "run_kubectl", lambda args: ("", ""))
     monkeypatch.setattr(kube, "run_velero", lambda args: ("", ""))
+    monkeypatch.setattr(kube, "run_dig", lambda args: ("192.168.10.2\n", ""))
     state = kube.gather_cluster_state()
 
     assert state["kubectl_ok"] is False
@@ -309,6 +331,7 @@ def test_gather_cluster_state_filters_dnsconfigforming_warnings(monkeypatch):
         return "", ""
 
     monkeypatch.setattr(kube, "run_kubectl", fake)
+    monkeypatch.setattr(kube, "run_dig", lambda args: ("192.168.10.2\n", ""))
     state = kube.gather_cluster_state()
 
     assert state["warning_count"] == 1
@@ -327,6 +350,7 @@ def test_gather_cluster_state_failed_jobs_invalid_json(monkeypatch):
         return "", ""
 
     monkeypatch.setattr(kube, "run_kubectl", fake)
+    monkeypatch.setattr(kube, "run_dig", lambda args: ("192.168.10.2\n", ""))
     state = kube.gather_cluster_state()
     assert state["failed_jobs"] == "None"
     assert state["failed_jobs_count"] == 0
@@ -363,6 +387,16 @@ def test_run_velero_file_not_found(monkeypatch):
     out, err = kube.run_velero(["get", "backups"])
     assert out == ""
     assert "velero not found" in err
+
+
+def test_run_dig_file_not_found(monkeypatch):
+    def boom(args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(shell.subprocess, "run", boom)
+    out, err = kube.run_dig(["+short", "auth.fulda-cloud.com"])
+    assert out == ""
+    assert "dig not found" in err
 
 
 # ── velero ──────────────────────────────────────────────────────────────────
@@ -445,6 +479,63 @@ def test_gather_expired_certs_invalid_json(monkeypatch):
     result = kube.gather_expired_certs()
 
     assert result == {"expired_certs": "None", "expired_cert_count": 0}
+
+
+# ── ExternalDNS check ───────────────────────────────────────────────────────
+
+
+def test_gather_externaldns_check_matches_expected(monkeypatch):
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_ENABLED", True)
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_HOSTNAME", "auth.fulda-cloud.com")
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_RESOLVER", "192.168.237.99")
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_EXPECTED_IP", "192.168.10.2")
+    monkeypatch.setattr(kube, "run_dig", lambda args: ("192.168.10.2\n", ""))
+
+    result = kube.gather_externaldns_check()
+
+    assert result["externaldns_ok"] is True
+    assert result["externaldns_status"] == "None"
+    assert result["externaldns_resolved"] == "192.168.10.2"
+
+
+def test_gather_externaldns_check_mismatch(monkeypatch):
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_ENABLED", True)
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_HOSTNAME", "auth.fulda-cloud.com")
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_RESOLVER", "192.168.237.99")
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_EXPECTED_IP", "192.168.10.2")
+    monkeypatch.setattr(kube, "run_dig", lambda args: ("195.201.217.35\n", ""))
+
+    result = kube.gather_externaldns_check()
+
+    assert result["externaldns_ok"] is False
+    assert result["externaldns_resolved"] == "195.201.217.35"
+    assert "195.201.217.35" in result["externaldns_status"]
+    assert "192.168.10.2" in result["externaldns_status"]
+
+
+def test_gather_externaldns_check_no_answer(monkeypatch):
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_ENABLED", True)
+    monkeypatch.setattr(kube, "run_dig", lambda args: ("", "connection timed out"))
+
+    result = kube.gather_externaldns_check()
+
+    assert result["externaldns_ok"] is False
+    assert result["externaldns_resolved"] == ""
+    assert "no answer" in result["externaldns_status"]
+    assert "connection timed out" in result["externaldns_status"]
+
+
+def test_gather_externaldns_check_disabled_skips_call(monkeypatch):
+    monkeypatch.setattr(config, "EXTERNALDNS_CHECK_ENABLED", False)
+    monkeypatch.setattr(kube, "run_dig", lambda args: pytest.fail("dig must not be called"))
+
+    result = kube.gather_externaldns_check()
+
+    assert result == {
+        "externaldns_ok": True,
+        "externaldns_status": "None",
+        "externaldns_resolved": "",
+    }
 
 
 # ── ask_groq ────────────────────────────────────────────────────────────────
@@ -582,6 +673,35 @@ def test_main_posts_red_embed_when_node_pressure(monkeypatch):
     embed = sent[0]
     assert embed["title"] == "🔴 K8s Health Report — Issues Found"
     assert embed["color"] == config.DISCORD_COLORS["red"]
+
+
+def test_main_posts_red_embed_when_externaldns_fails(monkeypatch):
+    state = dict(HEALTHY_STATE)
+    state["externaldns_ok"] = False
+    state["externaldns_resolved"] = "195.201.217.35"
+    state["externaldns_status"] = (
+        "auth.fulda-cloud.com via 192.168.237.99 resolved to 195.201.217.35, expected 192.168.10.2"
+    )
+    monkeypatch.setattr(kube, "gather_cluster_state", lambda: state)
+    prompts = []
+    monkeypatch.setattr(
+        groq,
+        "ask_groq",
+        lambda prompt: prompts.append(prompt) or "- ExternalDNS resolving to the wrong IP",
+    )
+    sent = []
+    monkeypatch.setattr(discord_client, "send_discord_embed", sent.append)
+
+    orchestrate.run()
+
+    assert prompts, "LLM should be called when ExternalDNS check fails"
+    assert "## ExternalDNS Health" in prompts[0]
+    assert len(sent) == 1
+    embed = sent[0]
+    assert embed["title"] == "🔴 K8s Health Report — Issues Found"
+    assert embed["color"] == config.DISCORD_COLORS["red"]
+    fields_by_name = {f["name"]: f["value"] for f in embed["fields"]}
+    assert fields_by_name["🌐 ExternalDNS-Health"] == "❌ FAIL (195.201.217.35)"
 
 
 def test_main_posts_amber_embed_when_kubectl_fails(monkeypatch):

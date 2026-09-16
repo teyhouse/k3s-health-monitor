@@ -16,6 +16,10 @@ def run_velero(args: list[str]) -> tuple[str, str]:
     return run_cmd("velero", args)
 
 
+def run_dig(args: list[str]) -> tuple[str, str]:
+    return run_cmd("dig", args, timeout=5)
+
+
 def get_server_version() -> str:
     """Return the k8s/k3s server version (e.g. 'v1.36.2+k3s1') or '' if unavailable."""
     out, _ = run_kubectl(["version", "--output=json"])
@@ -126,6 +130,32 @@ def gather_expired_certs() -> dict:
         "expired_certs": "\n".join(flagged) if flagged else "None",
         "expired_cert_count": len(flagged),
     }
+
+
+def gather_externaldns_check() -> dict:
+    if not config.EXTERNALDNS_CHECK_ENABLED:
+        return {"externaldns_ok": True, "externaldns_status": "None", "externaldns_resolved": ""}
+
+    hostname = config.EXTERNALDNS_CHECK_HOSTNAME
+    resolver = config.EXTERNALDNS_CHECK_RESOLVER
+    expected = config.EXTERNALDNS_CHECK_EXPECTED_IP
+
+    out, err = run_dig(["+short", hostname, f"@{resolver}"])
+    resolved = out.splitlines()[0].strip() if out.strip() else ""
+
+    if resolved == expected:
+        return {
+            "externaldns_ok": True,
+            "externaldns_status": "None",
+            "externaldns_resolved": resolved,
+        }
+
+    if not resolved:
+        status = f"{hostname} via {resolver}: no answer" + (f" ({err})" if err else "")
+    else:
+        status = f"{hostname} via {resolver} resolved to {resolved}, expected {expected}"
+
+    return {"externaldns_ok": False, "externaldns_status": status, "externaldns_resolved": resolved}
 
 
 def gather_cluster_state() -> dict:
@@ -258,6 +288,8 @@ def gather_cluster_state() -> dict:
 
     # Expired / expiring cert-manager certificates
     state.update(gather_expired_certs())
+
+    state.update(gather_externaldns_check())
 
     state["server_version"] = get_server_version()
 

@@ -36,3 +36,9 @@ VELERO_LOOKBACK_HOURS = int(os.environ.get("VELERO_LOOKBACK_HOURS", "24"))
 CERT_CHECK_ENABLED = _env_flag("CERT_CHECK_ENABLED")
 # Flag certificates expiring within this many days.
 CERT_EXPIRY_WARNING_DAYS = int(os.environ.get("CERT_EXPIRY_WARNING_DAYS", "7"))
+
+# ExternalDNS check — enabled by default, disable with EXTERNALDNS_CHECK_ENABLED=false.
+EXTERNALDNS_CHECK_ENABLED = _env_flag("EXTERNALDNS_CHECK_ENABLED")
+EXTERNALDNS_CHECK_HOSTNAME = os.environ.get("EXTERNALDNS_CHECK_HOSTNAME", "auth.fulda-cloud.com")
+EXTERNALDNS_CHECK_RESOLVER = os.environ.get("EXTERNALDNS_CHECK_RESOLVER", "192.168.237.99")
+EXTERNALDNS_CHECK_EXPECTED_IP = os.environ.get("EXTERNALDNS_CHECK_EXPECTED_IP", "192.168.10.2")

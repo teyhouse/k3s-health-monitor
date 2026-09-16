@@ -33,6 +33,15 @@ def build_summary_fields(state: dict) -> list:
             "value": str(state["node_pressure_count"]),
             "inline": True,
         },
+        {
+            "name": "🌐 ExternalDNS-Health",
+            "value": (
+                "✅ OK"
+                if state["externaldns_ok"]
+                else f"❌ FAIL ({state['externaldns_resolved'] or 'no answer'})"
+            ),
+            "inline": True,
+        },
     ]
 
 
@@ -46,6 +55,7 @@ def has_issues(state: dict) -> bool:
         "velero_failed_backups",
         "expired_certs",
         "node_pressure",
+        "externaldns_status",
     ]
     for key in keys:
         if state.get(key, "None") not in ("None", ""):
@@ -83,6 +93,9 @@ def build_prompt(state: dict, now: str) -> str:
 
 ## Recent Warning Events (last 30)
 {state["warning_events"]}
+
+## ExternalDNS Health
+{state["externaldns_status"]}
 
 Summarize any issues found. If everything looks healthy, say so briefly.
 """
