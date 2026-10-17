@@ -65,6 +65,15 @@ def build_summary_fields(state: dict) -> list:
             "inline": True,
         },
         {
+            "name": "🔑 K3s Cert",
+            "value": (
+                "n/a"
+                if state["k3s_cert_days_left"] is None
+                else f"{_icon(state['k3s_cert_issue'] != 'None')} {state['k3s_cert_days_left']}d"
+            ),
+            "inline": True,
+        },
+        {
             "name": "🐘 Postgres",
             "value": _ratio_value(state["cnpg_unhealthy_count"], state["cnpg_total"], "Healthy"),
             "inline": True,
@@ -89,6 +98,7 @@ def has_issues(state: dict) -> bool:
         "expired_certs",
         "node_pressure",
         "disk_issues",
+        "k3s_cert_issue",
         "externaldns_status",
         "flux_failed",
         "cnpg_issues",
@@ -111,6 +121,9 @@ def build_prompt(state: dict, now: str) -> str:
 
 ## Node Disk Usage Above Threshold
 {state["disk_issues"]}
+
+## k3s API Server Certificate (k3s rotates it on restart when close to expiry)
+{state["k3s_cert_issue"]}
 
 ## Non-Running / Non-Completed Pods
 {state["non_running_pods"]}

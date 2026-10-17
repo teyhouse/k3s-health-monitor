@@ -31,6 +31,8 @@ HEALTHY_STATE = {
     "disk_issues": "None",
     "disk_issue_count": 0,
     "disk_max_percent": 53,
+    "k3s_cert_issue": "None",
+    "k3s_cert_days_left": 313,
     "externaldns_ok": True,
     "externaldns_status": "None",
     "externaldns_resolved": "192.168.10.2",
@@ -346,7 +348,7 @@ def test_footer_text_omits_version_when_unavailable():
 
 def test_build_summary_fields():
     fields = reporting.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 14
+    assert len(fields) == 15
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
@@ -359,6 +361,7 @@ def test_build_summary_fields():
     assert by_name["🔁 Flux"] == "✅ 47/47 Ready"
     assert by_name["🐘 Postgres"] == "✅ 1/1 Healthy"
     assert by_name["💽 Disk Usage"] == "✅ 53%"
+    assert by_name["🔑 K3s Cert"] == "✅ 313d"
 
 
 def test_build_summary_fields_externaldns_failure():
@@ -654,6 +657,23 @@ def test_gather_externaldns_check_disabled_skips_call(monkeypatch):
         "externaldns_status": "None",
         "externaldns_resolved": "",
     }
+
+
+def test_gather_k3s_cert_flags_expiring_certificate(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    not_after = datetime.now(UTC) + timedelta(days=10, hours=1)
+    monkeypatch.setattr(config, "K3S_CERT_CHECK_ENABLED", True)
+    monkeypatch.setattr(config, "K3S_CERT_WARNING_DAYS", 30)
+    monkeypatch.setattr(kube, "get_k3s_cert_not_after", lambda: not_after)
+
+    result = kube.gather_k3s_cert()
+
+    assert result["k3s_cert_days_left"] == 10
+    assert "(10d left)" in result["k3s_cert_issue"]
+    assert reporting.has_issues(dict(HEALTHY_STATE, **result)) is True
+    fields = reporting.build_summary_fields(dict(HEALTHY_STATE, **result))
+    assert {f["name"]: f["value"] for f in fields}["🔑 K3s Cert"] == "❌ 10d"
 
 
 def test_gather_disk_usage_flags_full_filesystems(monkeypatch):

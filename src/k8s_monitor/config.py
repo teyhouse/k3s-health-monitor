@@ -38,6 +38,9 @@ CERT_CHECK_ENABLED = _env_flag("CERT_CHECK_ENABLED")
 # Flag certificates expiring within this many days.
 CERT_EXPIRY_WARNING_DAYS = int(os.environ.get("CERT_EXPIRY_WARNING_DAYS", "7"))
 
+K3S_CERT_CHECK_ENABLED = _env_flag("K3S_CERT_CHECK_ENABLED")
+K3S_CERT_WARNING_DAYS = int(os.environ.get("K3S_CERT_WARNING_DAYS", "30"))
+
 DISK_CHECK_ENABLED = _env_flag("DISK_CHECK_ENABLED")
 DISK_USAGE_WARNING_PERCENT = int(os.environ.get("DISK_USAGE_WARNING_PERCENT", "80"))
 

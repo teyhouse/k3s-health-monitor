@@ -1,6 +1,10 @@
+import base64
 import json
+import socket
+import ssl
 import sys
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse
 
 from k8s_monitor import config
 from utils.shell import run_cmd
@@ -144,6 +148,49 @@ def gather_expired_certs() -> dict:
         "expired_certs": "\n".join(flagged) if flagged else "None",
         "expired_cert_count": len(flagged),
     }
+
+
+def get_k3s_cert_not_after() -> datetime | None:
+    out, _ = run_kubectl(["config", "view", "--minify", "--raw", "-o", "json"])
+    try:
+        cluster = json.loads(out)["clusters"][0]["cluster"]
+    except (json.JSONDecodeError, KeyError, IndexError):
+        return None
+
+    url = urlparse(cluster.get("server", ""))
+    if url.scheme != "https" or not url.hostname:
+        return None
+
+    try:
+        ca_data = cluster.get("certificate-authority-data")
+        ctx = ssl.create_default_context(
+            cafile=cluster.get("certificate-authority"),
+            cadata=base64.b64decode(ca_data).decode() if ca_data else None,
+        )
+        ctx.check_hostname = False
+        with socket.create_connection((url.hostname, url.port or 443), timeout=5) as sock:
+            with ctx.wrap_socket(sock, server_hostname=url.hostname) as tls:
+                cert = tls.getpeercert()
+        return datetime.fromtimestamp(ssl.cert_time_to_seconds(cert["notAfter"]), UTC)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"⚠️  Failed to read API server certificate: {exc}", file=sys.stderr)
+        return None
+
+
+def gather_k3s_cert() -> dict:
+    empty = {"k3s_cert_issue": "None", "k3s_cert_days_left": None}
+    if not config.K3S_CERT_CHECK_ENABLED:
+        return empty
+
+    not_after = get_k3s_cert_not_after()
+    if not not_after:
+        return empty
+
+    days_left = (not_after - datetime.now(UTC)).days
+    issue = "None"
+    if days_left < config.K3S_CERT_WARNING_DAYS:
+        issue = f"API server certificate expires {not_after:%Y-%m-%d %H:%M} UTC ({days_left}d left)"
+    return {"k3s_cert_issue": issue, "k3s_cert_days_left": days_left}
 
 
 def gather_disk_usage() -> dict:
@@ -393,6 +440,8 @@ def gather_cluster_state() -> dict:
     state["node_pressure_count"] = len(pressure_lines)
 
     state.update(gather_disk_usage())
+
+    state.update(gather_k3s_cert())
 
     # All pods across namespaces — filter to non-Running/Completed only
     out, _ = run_kubectl(
