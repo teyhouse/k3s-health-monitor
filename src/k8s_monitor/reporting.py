@@ -5,6 +5,10 @@ def footer_text(now: str, state: dict) -> str:
     return f"k8s-monitor{version_part} • ran at {now}"
 
 
+def _ratio_value(failed: int, total: int, label: str) -> str:
+    return f"{'✅' if not failed else '❌'} {total - failed}/{total} {label}"
+
+
 def build_summary_fields(state: dict) -> list:
     """Build Discord embed summary fields from collected state counts."""
     return [
@@ -43,11 +47,13 @@ def build_summary_fields(state: dict) -> list:
             "inline": True,
         },
         {
+            "name": "🐘 Postgres",
+            "value": _ratio_value(state["cnpg_unhealthy_count"], state["cnpg_total"], "Healthy"),
+            "inline": True,
+        },
+        {
             "name": "🔁 Flux",
-            "value": (
-                f"{'✅' if not state['flux_failed_count'] else '❌'} "
-                f"{state['flux_total'] - state['flux_failed_count']}/{state['flux_total']} Ready"
-            ),
+            "value": _ratio_value(state["flux_failed_count"], state["flux_total"], "Ready"),
             "inline": True,
         },
     ]
@@ -65,6 +71,7 @@ def has_issues(state: dict) -> bool:
         "node_pressure",
         "externaldns_status",
         "flux_failed",
+        "cnpg_issues",
     ]
     for key in keys:
         if state.get(key, "None") not in ("None", ""):
@@ -108,6 +115,9 @@ def build_prompt(state: dict, now: str) -> str:
 
 ## Flux Resources Not Ready
 {state["flux_failed"]}
+
+## CloudNativePG Postgres Clusters
+{state["cnpg_issues"]}
 
 Summarize any issues found. If everything looks healthy, say so briefly.
 """

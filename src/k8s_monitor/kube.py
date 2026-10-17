@@ -146,6 +146,77 @@ def gather_expired_certs() -> dict:
     }
 
 
+def gather_cnpg_status() -> dict:
+    empty = {"cnpg_issues": "None", "cnpg_unhealthy_count": 0, "cnpg_total": 0}
+    if not config.CNPG_CHECK_ENABLED:
+        return empty
+
+    kinds = (
+        "clusters.postgresql.cnpg.io,backups.postgresql.cnpg.io,scheduledbackups.postgresql.cnpg.io"
+    )
+    out, _ = run_kubectl(["get", kinds, "--all-namespaces", "-o", "json"])
+    if not out:
+        return empty
+
+    try:
+        cnpg_data = json.loads(out)
+    except json.JSONDecodeError:
+        print("⚠️  Failed to parse CloudNativePG JSON", file=sys.stderr)
+        return empty
+
+    items = cnpg_data.get("items", [])
+    clusters = [i for i in items if i.get("kind") == "Cluster"]
+    cutoff = datetime.now(UTC) - timedelta(hours=config.CNPG_BACKUP_MAX_AGE_HOURS)
+
+    last_completed = {}
+    for backup in items:
+        if backup.get("kind") != "Backup" or backup.get("status", {}).get("phase") != "completed":
+            continue
+        key = (
+            backup["metadata"]["namespace"],
+            backup.get("spec", {}).get("cluster", {}).get("name"),
+        )
+        stopped = _parse_ts(backup["status"].get("stoppedAt", ""))
+        if stopped and (key not in last_completed or stopped > last_completed[key]):
+            last_completed[key] = stopped
+
+    issues = []
+    unhealthy = set()
+    for cluster in clusters:
+        ns = cluster["metadata"]["namespace"]
+        name = cluster["metadata"]["name"]
+        status = cluster.get("status", {})
+        if status.get("phase") != config.CNPG_HEALTHY_PHASE:
+            issues.append(f"{ns}\t{name}\tphase: {status.get('phase', 'unknown')}")
+            unhealthy.add((ns, name))
+        for cond in status.get("conditions", []):
+            if cond.get("type") in config.CNPG_CONDITIONS and cond.get("status") == "False":
+                msg = cond.get("message", "unknown reason")
+                if len(msg) > 100:
+                    msg = msg[:100] + "…"
+                issues.append(f"{ns}\t{name}\t{cond['type']}: {msg}")
+                unhealthy.add((ns, name))
+
+    for sched in items:
+        if sched.get("kind") != "ScheduledBackup" or sched.get("spec", {}).get("suspend"):
+            continue
+        created = _parse_ts(sched["metadata"].get("creationTimestamp", ""))
+        if not created or created >= cutoff:
+            continue
+        key = (sched["metadata"]["namespace"], sched.get("spec", {}).get("cluster", {}).get("name"))
+        last = last_completed.get(key)
+        if not last or last < cutoff:
+            since = last.strftime("%Y-%m-%dT%H:%M:%SZ") if last else "never"
+            issues.append(f"{key[0]}\t{key[1]}\tno completed backup since {since}")
+            unhealthy.add(key)
+
+    return {
+        "cnpg_issues": "\n".join(issues) if issues else "None",
+        "cnpg_unhealthy_count": len(unhealthy),
+        "cnpg_total": len(clusters),
+    }
+
+
 def gather_flux_status() -> dict:
     empty = {"flux_failed": "None", "flux_failed_count": 0, "flux_total": 0}
     if not config.FLUX_CHECK_ENABLED:
@@ -336,6 +407,8 @@ def gather_cluster_state() -> dict:
 
     # Expired / expiring cert-manager certificates
     state.update(gather_expired_certs())
+
+    state.update(gather_cnpg_status())
 
     state.update(gather_flux_status())
 

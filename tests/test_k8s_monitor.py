@@ -32,6 +32,9 @@ HEALTHY_STATE = {
     "flux_failed": "None",
     "flux_failed_count": 0,
     "flux_total": 47,
+    "cnpg_issues": "None",
+    "cnpg_unhealthy_count": 0,
+    "cnpg_total": 1,
     "server_version": "v1.36.2+k3s1",
 }
 
@@ -309,7 +312,7 @@ def test_footer_text_omits_version_when_unavailable():
 
 def test_build_summary_fields():
     fields = reporting.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 11
+    assert len(fields) == 12
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
@@ -320,6 +323,7 @@ def test_build_summary_fields():
     assert by_name["💾 Node Pressure"] == "0"
     assert by_name["🌐 ExternalDNS-Health"] == "✅ OK"
     assert by_name["🔁 Flux"] == "✅ 47/47 Ready"
+    assert by_name["🐘 Postgres"] == "✅ 1/1 Healthy"
 
 
 def test_build_summary_fields_externaldns_failure():
@@ -612,6 +616,70 @@ def test_gather_externaldns_check_disabled_skips_call(monkeypatch):
         "externaldns_status": "None",
         "externaldns_resolved": "",
     }
+
+
+def test_gather_cnpg_status_flags_unhealthy_and_stale_backups(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+
+    def iso(dt):
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def cluster(name, archiving):
+        return {
+            "kind": "Cluster",
+            "metadata": {"namespace": "postgresql", "name": name},
+            "status": {
+                "phase": "Cluster in healthy state",
+                "conditions": [
+                    {"type": "Ready", "status": "True"},
+                    {
+                        "type": "ContinuousArchiving",
+                        "status": archiving,
+                        "message": "unexpected failure invoking barman-cloud-wal-archive",
+                    },
+                ],
+            },
+        }
+
+    def scheduled(name, cluster_name):
+        return {
+            "kind": "ScheduledBackup",
+            "metadata": {
+                "namespace": "postgresql",
+                "name": name,
+                "creationTimestamp": iso(now - timedelta(days=30)),
+            },
+            "spec": {"cluster": {"name": cluster_name}},
+        }
+
+    def backup(cluster_name, age_hours):
+        return {
+            "kind": "Backup",
+            "metadata": {"namespace": "postgresql", "name": f"{cluster_name}-{age_hours}"},
+            "spec": {"cluster": {"name": cluster_name}},
+            "status": {"phase": "completed", "stoppedAt": iso(now - timedelta(hours=age_hours))},
+        }
+
+    items = [
+        cluster("healthy", "True"),
+        cluster("broken", "False"),
+        scheduled("healthy-daily", "healthy"),
+        scheduled("broken-daily", "broken"),
+        backup("healthy", 5),
+        backup("broken", 50),
+    ]
+    monkeypatch.setattr(config, "CNPG_CHECK_ENABLED", True)
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: (json.dumps({"items": items}), ""))
+
+    result = kube.gather_cnpg_status()
+
+    assert result["cnpg_total"] == 2
+    assert result["cnpg_unhealthy_count"] == 1
+    assert "broken\tContinuousArchiving: unexpected failure" in result["cnpg_issues"]
+    assert "broken\tno completed backup since" in result["cnpg_issues"]
+    assert "\thealthy\t" not in result["cnpg_issues"]
 
 
 def test_gather_flux_status_disabled_skips_call(monkeypatch):
