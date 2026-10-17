@@ -37,7 +37,7 @@ HEALTHY_STATE = {
 
 
 def fake_velero(args, now=None):
-    """Simulate velero output with a mix of recent/old and failed/completed backups."""
+    """Simulate velero backups and schedules: recent/old, failed/partial/completed, stale."""
     from datetime import UTC, datetime, timedelta
 
     now = now or datetime.now(UTC)
@@ -48,6 +48,7 @@ def fake_velero(args, now=None):
     backups = {
         "items": [
             {
+                "kind": "Backup",
                 "metadata": {
                     "name": "daily-app-recent",
                     "creationTimestamp": iso(now - timedelta(hours=2)),
@@ -58,6 +59,7 @@ def fake_velero(args, now=None):
                 },
             },
             {
+                "kind": "Backup",
                 "metadata": {
                     "name": "test-backup-recent",
                     "creationTimestamp": iso(now - timedelta(hours=1)),
@@ -65,11 +67,45 @@ def fake_velero(args, now=None):
                 "status": {"phase": "Completed", "failureReason": None},
             },
             {
+                "kind": "Backup",
                 "metadata": {
                     "name": "daily-app-old",
                     "creationTimestamp": iso(now - timedelta(hours=48)),
                 },
                 "status": {"phase": "Failed", "failureReason": "old failure"},
+            },
+            {
+                "kind": "Backup",
+                "metadata": {
+                    "name": "daily-db-partial",
+                    "creationTimestamp": iso(now - timedelta(hours=3)),
+                },
+                "status": {"phase": "PartiallyFailed", "errors": 2},
+            },
+            {
+                "kind": "Schedule",
+                "metadata": {
+                    "name": "daily-fresh",
+                    "creationTimestamp": iso(now - timedelta(days=30)),
+                },
+                "status": {"lastBackup": iso(now - timedelta(hours=6))},
+            },
+            {
+                "kind": "Schedule",
+                "metadata": {
+                    "name": "daily-stale",
+                    "creationTimestamp": iso(now - timedelta(days=30)),
+                },
+                "status": {"lastBackup": iso(now - timedelta(hours=50))},
+            },
+            {
+                "kind": "Schedule",
+                "metadata": {
+                    "name": "paused-stale",
+                    "creationTimestamp": iso(now - timedelta(days=30)),
+                },
+                "spec": {"paused": True},
+                "status": {"lastBackup": iso(now - timedelta(days=10))},
             },
         ]
     }
@@ -279,7 +315,7 @@ def test_build_summary_fields():
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
     assert by_name["📦 Non-Running Pods"] == "0"
     assert by_name["⚠️ Warnings (1h)"] == "0"
-    assert by_name["🛟 Failed Backups (24h)"] == "0"
+    assert by_name["🛟 Backup Issues (24h)"] == "0"
     assert by_name["🔏 Cert Issues"] == "0"
     assert by_name["💾 Node Pressure"] == "0"
     assert by_name["🌐 ExternalDNS-Health"] == "✅ OK"
@@ -326,7 +362,6 @@ def test_get_server_version_returns_empty_on_invalid_json(monkeypatch):
 
 def test_gather_cluster_state_counts(monkeypatch):
     monkeypatch.setattr(kube, "run_kubectl", fake_kubectl)
-    monkeypatch.setattr(kube, "run_velero", lambda args: ("", ""))
     monkeypatch.setattr(kube, "run_dig", lambda args: ("192.168.10.2\n", ""))
     state = kube.gather_cluster_state()
 
@@ -350,7 +385,6 @@ def test_gather_cluster_state_counts(monkeypatch):
 
 def test_gather_cluster_state_healthy_outputs(monkeypatch):
     monkeypatch.setattr(kube, "run_kubectl", lambda args: ("", ""))
-    monkeypatch.setattr(kube, "run_velero", lambda args: ("", ""))
     monkeypatch.setattr(kube, "run_dig", lambda args: ("192.168.10.2\n", ""))
     state = kube.gather_cluster_state()
 
@@ -405,7 +439,7 @@ def test_gather_cluster_state_failed_jobs_invalid_json(monkeypatch):
     assert state["failed_jobs_count"] == 0
 
 
-# ── run_kubectl / run_velero (via utils.shell) ──────────────────────────────
+# ── run_kubectl / run_dig (via utils.shell) ─────────────────────────────────
 
 
 def test_run_kubectl_file_not_found(monkeypatch):
@@ -428,16 +462,6 @@ def test_run_kubectl_timeout(monkeypatch):
     assert "timed out" in err
 
 
-def test_run_velero_file_not_found(monkeypatch):
-    def boom(args, **kwargs):
-        raise FileNotFoundError
-
-    monkeypatch.setattr(shell.subprocess, "run", boom)
-    out, err = kube.run_velero(["get", "backups"])
-    assert out == ""
-    assert "velero not found" in err
-
-
 def test_run_dig_file_not_found(monkeypatch):
     def boom(args, **kwargs):
         raise FileNotFoundError
@@ -451,21 +475,24 @@ def test_run_dig_file_not_found(monkeypatch):
 # ── velero ──────────────────────────────────────────────────────────────────
 
 
-def test_gather_velero_backups_counts_recent_failures_only(monkeypatch):
+def test_gather_velero_backups_counts_recent_failures_and_stale_schedules(monkeypatch):
     monkeypatch.setattr(config, "VELERO_CHECK_ENABLED", True)
-    monkeypatch.setattr(kube, "run_velero", fake_velero)
+    monkeypatch.setattr(kube, "run_kubectl", fake_velero)
     result = kube.gather_velero_backups()
 
-    assert result["velero_failed_count"] == 1
-    assert "daily-app-recent" in result["velero_failed_backups"]
+    assert result["velero_failed_count"] == 3
+    assert "daily-app-recent\tFailed: error putting object" in result["velero_failed_backups"]
+    assert "daily-db-partial\tPartiallyFailed: 2 errors" in result["velero_failed_backups"]
+    assert "daily-stale\tschedule has no backup since" in result["velero_failed_backups"]
     assert "daily-app-old" not in result["velero_failed_backups"]
     assert "test-backup-recent" not in result["velero_failed_backups"]
-    assert "x-amz-tagging" in result["velero_failed_backups"]
+    assert "daily-fresh" not in result["velero_failed_backups"]
+    assert "paused-stale" not in result["velero_failed_backups"]
 
 
 def test_gather_velero_backups_disabled_skips_call(monkeypatch):
     monkeypatch.setattr(config, "VELERO_CHECK_ENABLED", False)
-    monkeypatch.setattr(kube, "run_velero", lambda args: pytest.fail("velero must not be called"))
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: pytest.fail("kubectl must not be called"))
     result = kube.gather_velero_backups()
 
     assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}
@@ -473,7 +500,7 @@ def test_gather_velero_backups_disabled_skips_call(monkeypatch):
 
 def test_gather_velero_backups_empty_output(monkeypatch):
     monkeypatch.setattr(config, "VELERO_CHECK_ENABLED", True)
-    monkeypatch.setattr(kube, "run_velero", lambda args: ("", ""))
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: ("", ""))
     result = kube.gather_velero_backups()
 
     assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}
@@ -481,7 +508,7 @@ def test_gather_velero_backups_empty_output(monkeypatch):
 
 def test_gather_velero_backups_invalid_json(monkeypatch):
     monkeypatch.setattr(config, "VELERO_CHECK_ENABLED", True)
-    monkeypatch.setattr(kube, "run_velero", lambda args: ("not json", ""))
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: ("not json", ""))
     result = kube.gather_velero_backups()
 
     assert result == {"velero_failed_backups": "None", "velero_failed_count": 0}

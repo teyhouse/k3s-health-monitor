@@ -11,11 +11,6 @@ def run_kubectl(args: list[str]) -> tuple[str, str]:
     return run_cmd("kubectl", args)
 
 
-def run_velero(args: list[str]) -> tuple[str, str]:
-    """Run a velero command and return (stdout, stderr)."""
-    return run_cmd("velero", args)
-
-
 def run_dig(args: list[str]) -> tuple[str, str]:
     return run_cmd("dig", args, timeout=5)
 
@@ -37,38 +32,57 @@ def _warning_is_filtered(line: str) -> bool:
     return len(fields) > 3 and fields[3] in config.WARNING_FILTER
 
 
-def gather_velero_backups() -> dict:
-    """Collect failed Velero backups created in the last VELERO_LOOKBACK_HOURS."""
-    if not config.VELERO_CHECK_ENABLED:
-        return {"velero_failed_backups": "None", "velero_failed_count": 0}
+def _parse_ts(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
 
-    out, _ = run_velero(["get", "backups", "-o", "json"])
+
+def gather_velero_backups() -> dict:
+    """Collect failed Velero backups and schedules without a backup in VELERO_LOOKBACK_HOURS."""
+    empty = {"velero_failed_backups": "None", "velero_failed_count": 0}
+    if not config.VELERO_CHECK_ENABLED:
+        return empty
+
+    out, _ = run_kubectl(
+        ["get", "backups.velero.io,schedules.velero.io", "--all-namespaces", "-o", "json"]
+    )
     if not out:
-        return {"velero_failed_backups": "None", "velero_failed_count": 0}
+        return empty
 
     try:
-        backup_data = json.loads(out)
+        velero_data = json.loads(out)
     except json.JSONDecodeError:
-        print("⚠️  Failed to parse velero backups JSON", file=sys.stderr)
-        return {"velero_failed_backups": "None", "velero_failed_count": 0}
+        print("⚠️  Failed to parse velero JSON", file=sys.stderr)
+        return empty
 
     cutoff = datetime.now(UTC) - timedelta(hours=config.VELERO_LOOKBACK_HOURS)
     failed = []
-    for backup in backup_data.get("items", []):
-        created = backup.get("metadata", {}).get("creationTimestamp", "")
-        try:
-            created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-        except ValueError:
+    for item in velero_data.get("items", []):
+        name = item["metadata"]["name"]
+        status = item.get("status", {})
+        created_dt = _parse_ts(item["metadata"].get("creationTimestamp", ""))
+
+        if item.get("kind") == "Schedule":
+            if item.get("spec", {}).get("paused") or not created_dt or created_dt >= cutoff:
+                continue
+            last_backup = _parse_ts(status.get("lastBackup", ""))
+            if not last_backup or last_backup < cutoff:
+                failed.append(
+                    f"{name}\tschedule has no backup since {status.get('lastBackup', 'never')}"
+                )
             continue
-        if created_dt < cutoff:
+
+        if not created_dt or created_dt < cutoff:
             continue
-        if backup.get("status", {}).get("phase") != "Failed":
+        phase = status.get("phase")
+        if phase not in config.VELERO_FAILED_PHASES:
             continue
-        name = backup["metadata"]["name"]
-        reason = backup.get("status", {}).get("failureReason", "unknown reason") or "unknown reason"
+        reason = status.get("failureReason") or f"{status.get('errors', 0)} errors"
         if len(reason) > 140:
             reason = reason[:140] + "…"
-        failed.append(f"{name}\t{reason}")
+        failed.append(f"{name}\t{phase}: {reason}")
 
     return {
         "velero_failed_backups": "\n".join(failed) if failed else "None",

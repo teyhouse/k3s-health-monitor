@@ -31,6 +31,7 @@ WARNING_FILTER = {"DNSConfigForming"}
 VELERO_CHECK_ENABLED = _env_flag("VELERO_CHECK_ENABLED")
 # Only inspect backups created within this window (hours).
 VELERO_LOOKBACK_HOURS = int(os.environ.get("VELERO_LOOKBACK_HOURS", "24"))
+VELERO_FAILED_PHASES = {"Failed", "PartiallyFailed", "FailedValidation"}
 
 # Cert-manager certificate check — enabled by default, disable with CERT_CHECK_ENABLED=false.
 CERT_CHECK_ENABLED = _env_flag("CERT_CHECK_ENABLED")

@@ -19,7 +19,7 @@ def build_summary_fields(state: dict) -> list:
         {"name": "⏳ Pending Pods", "value": str(state["pending_count"]), "inline": True},
         {"name": "⚠️ Warnings (1h)", "value": str(state["warning_count"]), "inline": True},
         {
-            "name": "🛟 Failed Backups (24h)",
+            "name": "🛟 Backup Issues (24h)",
             "value": str(state["velero_failed_count"]),
             "inline": True,
         },
@@ -94,7 +94,7 @@ def build_prompt(state: dict, now: str) -> str:
 ## Pending Pods
 {state["pending_pods"]}
 
-## Velero Backups (last 24h)
+## Velero Backups (failed, partially failed, or schedules without a backup in the last 24h)
 {state["velero_failed_backups"]}
 
 ## Expired / Expiring Certificates

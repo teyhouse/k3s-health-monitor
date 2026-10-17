@@ -15,10 +15,11 @@ Every run always posts exactly one report:
 
 - **Healthy** — green embed. No LLM call is made; a static report with live
   summary stats (nodes ready, non-running pods, crashloops, failed jobs, pending
-  pods, failed Velero backups in the last 24h, expired/expiring certificates,
+  pods, Velero backup issues in the last 24h, expired/expiring certificates,
   recent warning events, Flux resources ready) is posted.
 - **Issues found** — red embed with an LLM-generated analysis of the collected
-  cluster state plus the same summary stats. Failed Velero backups and expired
+  cluster state plus the same summary stats. Failed or partially failed Velero
+  backups, Velero schedules without a backup in the lookback window, expired
   or soon-to-expire certificates count as issues and trigger this report, as do
   Flux sources, Kustomizations or HelmReleases reporting `Ready=False`.
 - **`kubectl` failure** — amber embed. The run cannot collect state and is
@@ -31,7 +32,7 @@ The k8s/k3s server version is shown in the embed footer.
 - Python >= 3.13
 - [uv](https://docs.astral.sh/uv/)
 - `kubectl` configured with access to the target cluster
-- `velero` CLI (for the backup check; only required when `VELERO_CHECK_ENABLED=true`)
+- Velero (for the backup check; only required when `VELERO_CHECK_ENABLED=true`)
 - `cert-manager` (for the certificate check; only required when `CERT_CHECK_ENABLED=true`)
 - Flux (for the Flux check; only required when `FLUX_CHECK_ENABLED=true`)
 
@@ -51,7 +52,7 @@ precedence):
 | `DISCORD_WEBHOOK`          | Discord webhook URL for the reports| — (required)                   |
 | `GROQ_MODEL`               | Groq model used for the analysis   | `llama-3.3-70b-versatile`      |
 | `VELERO_CHECK_ENABLED`     | Enable the Velero backup check     | `true`                         |
-| `VELERO_LOOKBACK_HOURS`    | How far back to scan for failed backups (hours) | `24`              |
+| `VELERO_LOOKBACK_HOURS`    | Window for failed backups and max age of a schedule's last backup (hours) | `24` |
 | `CERT_CHECK_ENABLED`       | Enable the cert-manager certificate check | `true`                  |
 | `CERT_EXPIRY_WARNING_DAYS` | Warn on certificates expiring within this many days | `7`           |
 | `FLUX_CHECK_ENABLED`       | Enable the Flux reconciliation check | `true`                       |
@@ -98,13 +99,13 @@ pyproject.toml                uv project definition and dependencies
 k8s-monitor.py                thin entry point — calls orchestrate.run()
 src/k8s_monitor/
   config.py                      env vars, constants (model, colors, filters)
-  kube.py                        kubectl/velero commands + cluster state gathering
+  kube.py                        kubectl/dig commands + cluster state gathering
   groq.py                        Groq LLM client
   discord_client.py              Discord webhook sender
   reporting.py                   pure functions: embed fields, prompt, health check
   orchestrate.py                 main flow: gather → decide → report
 utils/
-  shell.py                       generic subprocess runner (dedupes run_kubectl/velero)
+  shell.py                       generic subprocess runner (dedupes run_kubectl/dig)
 tests/                          pytest test suite
 .github/workflows/ci.yml       CI pipeline (lint + tests)
 .env.example                     example configuration (copy to .env)
