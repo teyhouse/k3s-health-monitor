@@ -14,6 +14,8 @@ HEALTHY_STATE = {
     "non_running_count": 0,
     "crashlooping": "None",
     "crashloop_count": 0,
+    "degraded_workloads": "None",
+    "degraded_workload_count": 0,
     "failed_jobs": "None",
     "failed_jobs_count": 0,
     "pending_pods": "None",
@@ -200,6 +202,35 @@ def fake_kubectl(args):
         return json.dumps(jobs), ""
     if "certificates.cert-manager.io" in joined:
         return fake_certs(args)
+    if "deployments,statefulsets,daemonsets" in joined:
+        workloads = {
+            "items": [
+                {
+                    "kind": "Deployment",
+                    "metadata": {"namespace": "auth", "name": "dex"},
+                    "spec": {"replicas": 1},
+                    "status": {"readyReplicas": 1},
+                },
+                {
+                    "kind": "Deployment",
+                    "metadata": {"namespace": "m2m-api", "name": "m2m-api"},
+                    "spec": {"replicas": 1},
+                    "status": {},
+                },
+                {
+                    "kind": "Deployment",
+                    "metadata": {"namespace": "n8n", "name": "n8n"},
+                    "spec": {"replicas": 0},
+                    "status": {},
+                },
+                {
+                    "kind": "DaemonSet",
+                    "metadata": {"namespace": "kube-system", "name": "cilium"},
+                    "status": {"desiredNumberScheduled": 2, "numberReady": 1},
+                },
+            ]
+        }
+        return json.dumps(workloads), ""
     if "fluxcd.io" in joined:
         flux = {
             "items": [
@@ -312,7 +343,7 @@ def test_footer_text_omits_version_when_unavailable():
 
 def test_build_summary_fields():
     fields = reporting.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 12
+    assert len(fields) == 13
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
@@ -374,6 +405,9 @@ def test_gather_cluster_state_counts(monkeypatch):
     assert state["node_ready"] == 2
     assert state["non_running_count"] == 1
     assert state["crashloop_count"] == 1
+    assert state["degraded_workload_count"] == 2
+    assert "m2m-api\tDeployment/m2m-api\t0/1 ready" in state["degraded_workloads"]
+    assert "DaemonSet/cilium\t1/2 ready" in state["degraded_workloads"]
     assert state["failed_jobs_count"] == 1
     assert state["pending_count"] == 1
     assert state["warning_count"] == 2

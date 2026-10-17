@@ -146,6 +146,37 @@ def gather_expired_certs() -> dict:
     }
 
 
+def gather_degraded_workloads() -> dict:
+    out, _ = run_kubectl(
+        ["get", "deployments,statefulsets,daemonsets", "--all-namespaces", "-o", "json"]
+    )
+    degraded = []
+    if out:
+        try:
+            workload_data = json.loads(out)
+        except json.JSONDecodeError:
+            print("⚠️  Failed to parse workloads JSON", file=sys.stderr)
+            workload_data = {"items": []}
+        for item in workload_data.get("items", []):
+            kind = item.get("kind", "")
+            status = item.get("status", {})
+            if kind == "DaemonSet":
+                desired = status.get("desiredNumberScheduled", 0)
+                ready = status.get("numberReady", 0)
+            else:
+                desired = item.get("spec", {}).get("replicas", 1)
+                ready = status.get("readyReplicas", 0)
+            if ready < desired:
+                ns = item["metadata"]["namespace"]
+                name = item["metadata"]["name"]
+                degraded.append(f"{ns}\t{kind}/{name}\t{ready}/{desired} ready")
+
+    return {
+        "degraded_workloads": "\n".join(degraded) if degraded else "None",
+        "degraded_workload_count": len(degraded),
+    }
+
+
 def gather_cnpg_status() -> dict:
     empty = {"cnpg_issues": "None", "cnpg_unhealthy_count": 0, "cnpg_total": 0}
     if not config.CNPG_CHECK_ENABLED:
@@ -371,6 +402,8 @@ def gather_cluster_state() -> dict:
                     break
     state["failed_jobs"] = "\n".join(failed_jobs) if failed_jobs else "None"
     state["failed_jobs_count"] = len(failed_jobs)
+
+    state.update(gather_degraded_workloads())
 
     # Pending pods
     out, _ = run_kubectl(

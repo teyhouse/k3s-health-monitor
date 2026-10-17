@@ -19,6 +19,11 @@ def build_summary_fields(state: dict) -> list:
         },
         {"name": "📦 Non-Running Pods", "value": str(state["non_running_count"]), "inline": True},
         {"name": "🔄 CrashLoops", "value": str(state["crashloop_count"]), "inline": True},
+        {
+            "name": "🧱 Degraded Workloads",
+            "value": str(state["degraded_workload_count"]),
+            "inline": True,
+        },
         {"name": "🚫 Failed Jobs", "value": str(state["failed_jobs_count"]), "inline": True},
         {"name": "⏳ Pending Pods", "value": str(state["pending_count"]), "inline": True},
         {"name": "⚠️ Warnings (1h)", "value": str(state["warning_count"]), "inline": True},
@@ -64,6 +69,7 @@ def has_issues(state: dict) -> bool:
     keys = [
         "non_running_pods",
         "crashlooping",
+        "degraded_workloads",
         "failed_jobs",
         "pending_pods",
         "velero_failed_backups",
@@ -94,6 +100,9 @@ def build_prompt(state: dict, now: str) -> str:
 
 ## CrashLooping / Error Containers
 {state["crashlooping"]}
+
+## Degraded Workloads (Deployments, StatefulSets, DaemonSets with fewer ready replicas than desired)
+{state["degraded_workloads"]}
 
 ## Failed Jobs
 {state["failed_jobs"]}

@@ -14,7 +14,7 @@ analyzed with Groq's free LLM API, and delivered as a Discord embed.
 Every run always posts exactly one report:
 
 - **Healthy** — green embed. No LLM call is made; a static report with live
-  summary stats (nodes ready, non-running pods, crashloops, failed jobs, pending
+  summary stats (nodes ready, non-running pods, crashloops, degraded workloads, failed jobs, pending
   pods, Velero backup issues in the last 24h, expired/expiring certificates,
   recent warning events, Flux resources ready, healthy Postgres clusters) is posted.
 - **Issues found** — red embed with an LLM-generated analysis of the collected
