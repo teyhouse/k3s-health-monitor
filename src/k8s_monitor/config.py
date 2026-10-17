@@ -38,6 +38,9 @@ CERT_CHECK_ENABLED = _env_flag("CERT_CHECK_ENABLED")
 # Flag certificates expiring within this many days.
 CERT_EXPIRY_WARNING_DAYS = int(os.environ.get("CERT_EXPIRY_WARNING_DAYS", "7"))
 
+DISK_CHECK_ENABLED = _env_flag("DISK_CHECK_ENABLED")
+DISK_USAGE_WARNING_PERCENT = int(os.environ.get("DISK_USAGE_WARNING_PERCENT", "80"))
+
 CNPG_CHECK_ENABLED = _env_flag("CNPG_CHECK_ENABLED")
 CNPG_BACKUP_MAX_AGE_HOURS = int(os.environ.get("CNPG_BACKUP_MAX_AGE_HOURS", "24"))
 CNPG_HEALTHY_PHASE = "Cluster in healthy state"

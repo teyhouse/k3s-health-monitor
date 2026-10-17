@@ -28,6 +28,9 @@ HEALTHY_STATE = {
     "expired_cert_count": 0,
     "node_pressure": "None",
     "node_pressure_count": 0,
+    "disk_issues": "None",
+    "disk_issue_count": 0,
+    "disk_max_percent": 53,
     "externaldns_ok": True,
     "externaldns_status": "None",
     "externaldns_resolved": "192.168.10.2",
@@ -343,7 +346,7 @@ def test_footer_text_omits_version_when_unavailable():
 
 def test_build_summary_fields():
     fields = reporting.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 13
+    assert len(fields) == 14
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
@@ -355,6 +358,7 @@ def test_build_summary_fields():
     assert by_name["🌐 ExternalDNS-Health"] == "✅ OK"
     assert by_name["🔁 Flux"] == "✅ 47/47 Ready"
     assert by_name["🐘 Postgres"] == "✅ 1/1 Healthy"
+    assert by_name["💽 Disk Usage"] == "✅ 53%"
 
 
 def test_build_summary_fields_externaldns_failure():
@@ -650,6 +654,35 @@ def test_gather_externaldns_check_disabled_skips_call(monkeypatch):
         "externaldns_status": "None",
         "externaldns_resolved": "",
     }
+
+
+def test_gather_disk_usage_flags_full_filesystems(monkeypatch):
+    gib = 2**30
+    stats = {
+        "node1": {"fs": {"capacityBytes": 100 * gib, "availableBytes": 15 * gib}},
+        "node2": {
+            "fs": {"capacityBytes": 100 * gib, "availableBytes": 60 * gib},
+            "runtime": {"imageFs": {"capacityBytes": 100 * gib, "availableBytes": 60 * gib}},
+        },
+    }
+
+    def fake(args):
+        if args[:2] == ["get", "nodes"]:
+            return "node/node1\nnode/node2", ""
+        node = args[2].split("/")[4]
+        return json.dumps({"node": stats[node]}), ""
+
+    monkeypatch.setattr(config, "DISK_CHECK_ENABLED", True)
+    monkeypatch.setattr(config, "DISK_USAGE_WARNING_PERCENT", 80)
+    monkeypatch.setattr(kube, "run_kubectl", fake)
+
+    result = kube.gather_disk_usage()
+
+    assert result["disk_issue_count"] == 1
+    assert result["disk_max_percent"] == 85
+    assert result["disk_issues"] == "node1\tnodefs\t85% used (15.0 GiB free)"
+    fields = reporting.build_summary_fields(dict(HEALTHY_STATE, **result))
+    assert {f["name"]: f["value"] for f in fields}["💽 Disk Usage"] == "❌ 85%"
 
 
 def test_gather_cnpg_status_flags_unhealthy_and_stale_backups(monkeypatch):

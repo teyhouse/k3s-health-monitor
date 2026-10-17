@@ -5,8 +5,12 @@ def footer_text(now: str, state: dict) -> str:
     return f"k8s-monitor{version_part} • ran at {now}"
 
 
+def _icon(failed: int) -> str:
+    return "❌" if failed else "✅"
+
+
 def _ratio_value(failed: int, total: int, label: str) -> str:
-    return f"{'✅' if not failed else '❌'} {total - failed}/{total} {label}"
+    return f"{_icon(failed)} {total - failed}/{total} {label}"
 
 
 def build_summary_fields(state: dict) -> list:
@@ -52,6 +56,15 @@ def build_summary_fields(state: dict) -> list:
             "inline": True,
         },
         {
+            "name": "💽 Disk Usage",
+            "value": (
+                "n/a"
+                if state["disk_max_percent"] is None
+                else f"{_icon(state['disk_issue_count'])} {state['disk_max_percent']}%"
+            ),
+            "inline": True,
+        },
+        {
             "name": "🐘 Postgres",
             "value": _ratio_value(state["cnpg_unhealthy_count"], state["cnpg_total"], "Healthy"),
             "inline": True,
@@ -75,6 +88,7 @@ def has_issues(state: dict) -> bool:
         "velero_failed_backups",
         "expired_certs",
         "node_pressure",
+        "disk_issues",
         "externaldns_status",
         "flux_failed",
         "cnpg_issues",
@@ -94,6 +108,9 @@ def build_prompt(state: dict, now: str) -> str:
 
 ## Node Pressure Conditions (DiskPressure, MemoryPressure, PIDPressure)
 {state["node_pressure"]}
+
+## Node Disk Usage Above Threshold
+{state["disk_issues"]}
 
 ## Non-Running / Non-Completed Pods
 {state["non_running_pods"]}

@@ -16,13 +16,14 @@ Every run always posts exactly one report:
 - **Healthy** — green embed. No LLM call is made; a static report with live
   summary stats (nodes ready, non-running pods, crashloops, degraded workloads, failed jobs, pending
   pods, Velero backup issues in the last 24h, expired/expiring certificates,
-  recent warning events, Flux resources ready, healthy Postgres clusters) is posted.
+  recent warning events, max node disk usage, Flux resources ready, healthy Postgres clusters) is posted.
 - **Issues found** — red embed with an LLM-generated analysis of the collected
   cluster state plus the same summary stats. Failed or partially failed Velero
   backups, Velero schedules without a backup in the lookback window, expired
   or soon-to-expire certificates count as issues and trigger this report, as do
   Flux sources, Kustomizations or HelmReleases reporting `Ready=False`, and
-  CloudNativePG clusters that are unhealthy, failing WAL archiving or backups, or
+  node filesystems above the disk usage threshold, CloudNativePG clusters that
+  are unhealthy, failing WAL archiving or backups, or
   missing a recent completed backup.
 - **`kubectl` failure** — amber embed. The run cannot collect state and is
   reported as such rather than falsely reported as healthy.
@@ -57,6 +58,8 @@ precedence):
 | `VELERO_LOOKBACK_HOURS`    | Window for failed backups and max age of a schedule's last backup (hours) | `24` |
 | `CERT_CHECK_ENABLED`       | Enable the cert-manager certificate check | `true`                  |
 | `CERT_EXPIRY_WARNING_DAYS` | Warn on certificates expiring within this many days | `7`           |
+| `DISK_CHECK_ENABLED`       | Enable the node disk usage check   | `true`                         |
+| `DISK_USAGE_WARNING_PERCENT` | Warn when a node filesystem is at least this full (percent) | `80` |
 | `CNPG_CHECK_ENABLED`       | Enable the CloudNativePG cluster and backup check | `true`               |
 | `CNPG_BACKUP_MAX_AGE_HOURS` | Max age of the last completed CNPG backup for scheduled clusters (hours) | `24` |
 | `FLUX_CHECK_ENABLED`       | Enable the Flux reconciliation check | `true`                       |

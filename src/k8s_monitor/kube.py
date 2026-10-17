@@ -146,6 +146,47 @@ def gather_expired_certs() -> dict:
     }
 
 
+def gather_disk_usage() -> dict:
+    empty = {"disk_issues": "None", "disk_issue_count": 0, "disk_max_percent": None}
+    if not config.DISK_CHECK_ENABLED:
+        return empty
+
+    out, _ = run_kubectl(["get", "nodes", "-o", "name"])
+    nodes = [line.removeprefix("node/") for line in out.splitlines() if line.startswith("node/")]
+
+    issues = []
+    max_percent = None
+    for node in nodes:
+        out, _ = run_kubectl(["get", "--raw", f"/api/v1/nodes/{node}/proxy/stats/summary"])
+        try:
+            summary = json.loads(out)["node"]
+        except (json.JSONDecodeError, KeyError):
+            print(f"⚠️  Failed to read disk stats for node {node}", file=sys.stderr)
+            continue
+
+        seen = set()
+        for label, fs in (
+            ("nodefs", summary.get("fs", {})),
+            ("imagefs", summary.get("runtime", {}).get("imageFs", {})),
+        ):
+            capacity = fs.get("capacityBytes")
+            available = fs.get("availableBytes")
+            if not capacity or available is None or (capacity, available) in seen:
+                continue
+            seen.add((capacity, available))
+            percent = round(100 - available / capacity * 100)
+            max_percent = percent if max_percent is None else max(max_percent, percent)
+            if percent >= config.DISK_USAGE_WARNING_PERCENT:
+                free_gib = available / 2**30
+                issues.append(f"{node}\t{label}\t{percent}% used ({free_gib:.1f} GiB free)")
+
+    return {
+        "disk_issues": "\n".join(issues) if issues else "None",
+        "disk_issue_count": len(issues),
+        "disk_max_percent": max_percent,
+    }
+
+
 def gather_degraded_workloads() -> dict:
     out, _ = run_kubectl(
         ["get", "deployments,statefulsets,daemonsets", "--all-namespaces", "-o", "json"]
@@ -350,6 +391,8 @@ def gather_cluster_state() -> dict:
                     pressure_lines.append(f"{node_name}\t{cond_type}")
     state["node_pressure"] = "\n".join(pressure_lines) if pressure_lines else "None"
     state["node_pressure_count"] = len(pressure_lines)
+
+    state.update(gather_disk_usage())
 
     # All pods across namespaces — filter to non-Running/Completed only
     out, _ = run_kubectl(
