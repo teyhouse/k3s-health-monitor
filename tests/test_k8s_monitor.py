@@ -29,6 +29,9 @@ HEALTHY_STATE = {
     "externaldns_ok": True,
     "externaldns_status": "None",
     "externaldns_resolved": "192.168.10.2",
+    "flux_failed": "None",
+    "flux_failed_count": 0,
+    "flux_total": 47,
     "server_version": "v1.36.2+k3s1",
 }
 
@@ -158,6 +161,36 @@ def fake_kubectl(args):
         return json.dumps(jobs), ""
     if "certificates.cert-manager.io" in joined:
         return fake_certs(args)
+    if "fluxcd.io" in joined:
+        flux = {
+            "items": [
+                {
+                    "kind": "Kustomization",
+                    "metadata": {"namespace": "flux-system", "name": "apps"},
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                },
+                {
+                    "kind": "GitRepository",
+                    "metadata": {"namespace": "flux-system", "name": "flux-system"},
+                    "status": {
+                        "conditions": [
+                            {
+                                "type": "Ready",
+                                "status": "False",
+                                "reason": "GitOperationFailed",
+                                "message": "failed to checkout and determine revision",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "kind": "HelmRelease",
+                    "metadata": {"namespace": "velero", "name": "velero"},
+                    "status": {"conditions": [{"type": "Ready", "status": "Unknown"}]},
+                },
+            ]
+        }
+        return json.dumps(flux), ""
     if "get events" in joined:
         return (
             "NAMESPACE LAST SEEN TYPE REASON OBJECT MESSAGE\n"
@@ -216,6 +249,12 @@ def test_has_issues_detects_externaldns_failure():
     assert reporting.has_issues(state) is True
 
 
+def test_has_issues_detects_flux_failure():
+    state = dict(HEALTHY_STATE)
+    state["flux_failed"] = "flux-system\tGitRepository/flux-system\tGitOperationFailed: x"
+    assert reporting.has_issues(state) is True
+
+
 # ── footer_text ─────────────────────────────────────────────────────────────
 
 
@@ -234,7 +273,7 @@ def test_footer_text_omits_version_when_unavailable():
 
 def test_build_summary_fields():
     fields = reporting.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 10
+    assert len(fields) == 11
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
@@ -244,6 +283,7 @@ def test_build_summary_fields():
     assert by_name["🔏 Cert Issues"] == "0"
     assert by_name["💾 Node Pressure"] == "0"
     assert by_name["🌐 ExternalDNS-Health"] == "✅ OK"
+    assert by_name["🔁 Flux"] == "✅ 47/47 Ready"
 
 
 def test_build_summary_fields_externaldns_failure():
@@ -251,6 +291,12 @@ def test_build_summary_fields_externaldns_failure():
     fields = reporting.build_summary_fields(state)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🌐 ExternalDNS-Health"] == "❌ FAIL (195.201.217.35)"
+
+
+def test_build_summary_fields_flux_failure():
+    state = dict(HEALTHY_STATE, flux_failed_count=2)
+    by_name = {field["name"]: field["value"] for field in reporting.build_summary_fields(state)}
+    assert by_name["🔁 Flux"] == "❌ 45/47 Ready"
 
 
 # ── get_server_version ──────────────────────────────────────────────────────
@@ -296,6 +342,9 @@ def test_gather_cluster_state_counts(monkeypatch):
     assert state["expired_cert_count"] == 3
     assert state["node_pressure_count"] == 0
     assert state["externaldns_ok"] is True
+    assert state["flux_total"] == 3
+    assert state["flux_failed_count"] == 1
+    assert "GitRepository/flux-system\tGitOperationFailed" in state["flux_failed"]
     assert state["server_version"] == "v1.36.2+k3s1"
 
 
@@ -536,6 +585,15 @@ def test_gather_externaldns_check_disabled_skips_call(monkeypatch):
         "externaldns_status": "None",
         "externaldns_resolved": "",
     }
+
+
+def test_gather_flux_status_disabled_skips_call(monkeypatch):
+    monkeypatch.setattr(config, "FLUX_CHECK_ENABLED", False)
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: pytest.fail("kubectl must not be called"))
+
+    result = kube.gather_flux_status()
+
+    assert result == {"flux_failed": "None", "flux_failed_count": 0, "flux_total": 0}
 
 
 # ── ask_groq ────────────────────────────────────────────────────────────────

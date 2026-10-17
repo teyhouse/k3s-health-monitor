@@ -16,10 +16,11 @@ Every run always posts exactly one report:
 - **Healthy** — green embed. No LLM call is made; a static report with live
   summary stats (nodes ready, non-running pods, crashloops, failed jobs, pending
   pods, failed Velero backups in the last 24h, expired/expiring certificates,
-  recent warning events) is posted.
+  recent warning events, Flux resources ready) is posted.
 - **Issues found** — red embed with an LLM-generated analysis of the collected
   cluster state plus the same summary stats. Failed Velero backups and expired
-  or soon-to-expire certificates count as issues and trigger this report.
+  or soon-to-expire certificates count as issues and trigger this report, as do
+  Flux sources, Kustomizations or HelmReleases reporting `Ready=False`.
 - **`kubectl` failure** — amber embed. The run cannot collect state and is
   reported as such rather than falsely reported as healthy.
 
@@ -32,6 +33,7 @@ The k8s/k3s server version is shown in the embed footer.
 - `kubectl` configured with access to the target cluster
 - `velero` CLI (for the backup check; only required when `VELERO_CHECK_ENABLED=true`)
 - `cert-manager` (for the certificate check; only required when `CERT_CHECK_ENABLED=true`)
+- Flux (for the Flux check; only required when `FLUX_CHECK_ENABLED=true`)
 
 ## Setup
 
@@ -52,6 +54,7 @@ precedence):
 | `VELERO_LOOKBACK_HOURS`    | How far back to scan for failed backups (hours) | `24`              |
 | `CERT_CHECK_ENABLED`       | Enable the cert-manager certificate check | `true`                  |
 | `CERT_EXPIRY_WARNING_DAYS` | Warn on certificates expiring within this many days | `7`           |
+| `FLUX_CHECK_ENABLED`       | Enable the Flux reconciliation check | `true`                       |
 
 `.env` is git-ignored and must never be committed.
 

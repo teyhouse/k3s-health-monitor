@@ -132,6 +132,40 @@ def gather_expired_certs() -> dict:
     }
 
 
+def gather_flux_status() -> dict:
+    empty = {"flux_failed": "None", "flux_failed_count": 0, "flux_total": 0}
+    if not config.FLUX_CHECK_ENABLED:
+        return empty
+
+    out, _ = run_kubectl(["get", ",".join(config.FLUX_KINDS), "--all-namespaces", "-o", "json"])
+    if not out:
+        return empty
+
+    try:
+        flux_data = json.loads(out)
+    except json.JSONDecodeError:
+        print("⚠️  Failed to parse Flux resources JSON", file=sys.stderr)
+        return empty
+
+    items = flux_data.get("items", [])
+    failed = []
+    for item in items:
+        for cond in item.get("status", {}).get("conditions", []):
+            if cond.get("type") == "Ready" and cond.get("status") == "False":
+                ns = item["metadata"]["namespace"]
+                name = f"{item.get('kind', '')}/{item['metadata']['name']}"
+                msg = cond.get("message", "unknown reason")
+                if len(msg) > 100:
+                    msg = msg[:100] + "…"
+                failed.append(f"{ns}\t{name}\t{cond.get('reason', '')}: {msg}")
+
+    return {
+        "flux_failed": "\n".join(failed) if failed else "None",
+        "flux_failed_count": len(failed),
+        "flux_total": len(items),
+    }
+
+
 def gather_externaldns_check() -> dict:
     if not config.EXTERNALDNS_CHECK_ENABLED:
         return {"externaldns_ok": True, "externaldns_status": "None", "externaldns_resolved": ""}
@@ -288,6 +322,8 @@ def gather_cluster_state() -> dict:
 
     # Expired / expiring cert-manager certificates
     state.update(gather_expired_certs())
+
+    state.update(gather_flux_status())
 
     state.update(gather_externaldns_check())
 

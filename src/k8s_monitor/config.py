@@ -37,6 +37,15 @@ CERT_CHECK_ENABLED = _env_flag("CERT_CHECK_ENABLED")
 # Flag certificates expiring within this many days.
 CERT_EXPIRY_WARNING_DAYS = int(os.environ.get("CERT_EXPIRY_WARNING_DAYS", "7"))
 
+FLUX_CHECK_ENABLED = _env_flag("FLUX_CHECK_ENABLED")
+FLUX_KINDS = [
+    "gitrepositories.source.toolkit.fluxcd.io",
+    "ocirepositories.source.toolkit.fluxcd.io",
+    "helmrepositories.source.toolkit.fluxcd.io",
+    "kustomizations.kustomize.toolkit.fluxcd.io",
+    "helmreleases.helm.toolkit.fluxcd.io",
+]
+
 # ExternalDNS check — enabled by default, disable with EXTERNALDNS_CHECK_ENABLED=false.
 EXTERNALDNS_CHECK_ENABLED = _env_flag("EXTERNALDNS_CHECK_ENABLED")
 EXTERNALDNS_CHECK_HOSTNAME = os.environ.get("EXTERNALDNS_CHECK_HOSTNAME", "auth.fulda-cloud.com")

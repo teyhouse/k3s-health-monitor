@@ -42,6 +42,14 @@ def build_summary_fields(state: dict) -> list:
             ),
             "inline": True,
         },
+        {
+            "name": "🔁 Flux",
+            "value": (
+                f"{'✅' if not state['flux_failed_count'] else '❌'} "
+                f"{state['flux_total'] - state['flux_failed_count']}/{state['flux_total']} Ready"
+            ),
+            "inline": True,
+        },
     ]
 
 
@@ -56,6 +64,7 @@ def has_issues(state: dict) -> bool:
         "expired_certs",
         "node_pressure",
         "externaldns_status",
+        "flux_failed",
     ]
     for key in keys:
         if state.get(key, "None") not in ("None", ""):
@@ -96,6 +105,9 @@ def build_prompt(state: dict, now: str) -> str:
 
 ## ExternalDNS Health
 {state["externaldns_status"]}
+
+## Flux Resources Not Ready
+{state["flux_failed"]}
 
 Summarize any issues found. If everything looks healthy, say so briefly.
 """
