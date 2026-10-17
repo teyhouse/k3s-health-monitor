@@ -83,6 +83,13 @@ def build_summary_fields(state: dict) -> list:
             "value": _ratio_value(state["flux_failed_count"], state["flux_total"], "Ready"),
             "inline": True,
         },
+        {
+            "name": "🔐 SealedSecrets",
+            "value": _ratio_value(
+                state["sealed_secrets_failed_count"], state["sealed_secrets_total"], "Synced"
+            ),
+            "inline": True,
+        },
     ]
 
 
@@ -102,6 +109,7 @@ def has_issues(state: dict) -> bool:
         "externaldns_status",
         "flux_failed",
         "cnpg_issues",
+        "sealed_secrets_failed",
     ]
     for key in keys:
         if state.get(key, "None") not in ("None", ""):
@@ -157,6 +165,9 @@ def build_prompt(state: dict, now: str) -> str:
 
 ## CloudNativePG Postgres Clusters
 {state["cnpg_issues"]}
+
+## SealedSecrets Not Synced
+{state["sealed_secrets_failed"]}
 
 Summarize any issues found. If everything looks healthy, say so briefly.
 """

@@ -14,23 +14,34 @@ analyzed with Groq's free LLM API, and delivered as a Discord embed.
 Every run always posts exactly one report:
 
 - **Healthy** — green embed. No LLM call is made; a static report with live
-  summary stats (nodes ready, non-running pods, crashloops, degraded workloads, failed jobs, pending
-  pods, Velero backup issues in the last 24h, expired/expiring certificates,
-  recent warning events, max node disk usage, days until the k3s API server
-  certificate expires, Flux resources ready, healthy Postgres clusters) is posted.
+  summary stats for every check below is posted.
 - **Issues found** — red embed with an LLM-generated analysis of the collected
-  cluster state plus the same summary stats. Failed or partially failed Velero
-  backups, Velero schedules without a backup in the lookback window, expired
-  or soon-to-expire certificates count as issues and trigger this report, as do
-  Flux sources, Kustomizations or HelmReleases reporting `Ready=False`, and
-  node filesystems above the disk usage threshold, a k3s API server certificate
-  close to expiry, CloudNativePG clusters that
-  are unhealthy, failing WAL archiving or backups, or
-  missing a recent completed backup.
+  cluster state plus the same summary stats.
 - **`kubectl` failure** — amber embed. The run cannot collect state and is
   reported as such rather than falsely reported as healthy.
 
 The k8s/k3s server version is shown in the embed footer.
+
+### Checks
+
+Any of the following counts as an issue and triggers the red report:
+
+- Non-running, pending, or crashlooping pods, and failed jobs
+- Deployments, StatefulSets, or DaemonSets with fewer ready replicas than desired
+- Node pressure conditions (disk, memory, PID)
+- Node filesystems at or above `DISK_USAGE_WARNING_PERCENT`
+- A k3s API server certificate expiring within `K3S_CERT_WARNING_DAYS`
+- Failed or partially failed Velero backups, and Velero schedules without a
+  backup within `VELERO_LOOKBACK_HOURS`
+- Expired, soon-to-expire, or not ready cert-manager certificates
+- CloudNativePG clusters that are unhealthy, failing WAL archiving or backups,
+  or without a completed backup within `CNPG_BACKUP_MAX_AGE_HOURS`
+- Flux sources, Kustomizations, or HelmReleases reporting `Ready=False`
+- SealedSecrets that failed to sync
+- ExternalDNS resolving the check hostname to an unexpected IP
+
+Recent warning events are counted and passed to the LLM, but do not trigger a
+report on their own.
 
 ## Requirements
 
@@ -67,14 +78,16 @@ precedence):
 | `CNPG_CHECK_ENABLED`       | Enable the CloudNativePG cluster and backup check | `true`               |
 | `CNPG_BACKUP_MAX_AGE_HOURS` | Max age of the last completed CNPG backup for scheduled clusters (hours) | `24` |
 | `FLUX_CHECK_ENABLED`       | Enable the Flux reconciliation check | `true`                       |
+| `SEALED_SECRETS_CHECK_ENABLED` | Enable the SealedSecrets sync check | `true`                    |
 
 `.env` is git-ignored and must never be committed.
 
 ## Privacy
 
-When issues are detected, collected cluster state (node and pod names,
-namespaces, warning events, job names, backup/certificate details) is sent to
-Groq's cloud LLM API for analysis. Only use this tool with clusters whose
+When issues are detected, collected cluster state (node, pod, workload and job
+names, namespaces, warning events, backup/certificate details, failing Flux
+resource, Postgres cluster and SealedSecret names with their error messages,
+disk usage) is sent to Groq's cloud LLM API for analysis. Only use this tool with clusters whose
 metadata you are comfortable sharing with a third-party service. Healthy runs
 make no external calls other than posting to your Discord webhook.
 

@@ -336,6 +336,42 @@ def gather_cnpg_status() -> dict:
     }
 
 
+def gather_sealed_secrets() -> dict:
+    empty = {
+        "sealed_secrets_failed": "None",
+        "sealed_secrets_failed_count": 0,
+        "sealed_secrets_total": 0,
+    }
+    if not config.SEALED_SECRETS_CHECK_ENABLED:
+        return empty
+
+    out, _ = run_kubectl(["get", "sealedsecrets.bitnami.com", "--all-namespaces", "-o", "json"])
+    if not out:
+        return empty
+
+    try:
+        sealed_data = json.loads(out)
+    except json.JSONDecodeError:
+        print("⚠️  Failed to parse SealedSecrets JSON", file=sys.stderr)
+        return empty
+
+    items = sealed_data.get("items", [])
+    failed = []
+    for item in items:
+        for cond in item.get("status", {}).get("conditions", []):
+            if cond.get("type") == "Synced" and cond.get("status") == "False":
+                msg = cond.get("message", "unknown reason")
+                if len(msg) > 100:
+                    msg = msg[:100] + "…"
+                failed.append(f"{item['metadata']['namespace']}\t{item['metadata']['name']}\t{msg}")
+
+    return {
+        "sealed_secrets_failed": "\n".join(failed) if failed else "None",
+        "sealed_secrets_failed_count": len(failed),
+        "sealed_secrets_total": len(items),
+    }
+
+
 def gather_flux_status() -> dict:
     empty = {"flux_failed": "None", "flux_failed_count": 0, "flux_total": 0}
     if not config.FLUX_CHECK_ENABLED:
@@ -536,6 +572,8 @@ def gather_cluster_state() -> dict:
     state.update(gather_cnpg_status())
 
     state.update(gather_flux_status())
+
+    state.update(gather_sealed_secrets())
 
     state.update(gather_externaldns_check())
 

@@ -42,6 +42,9 @@ HEALTHY_STATE = {
     "cnpg_issues": "None",
     "cnpg_unhealthy_count": 0,
     "cnpg_total": 1,
+    "sealed_secrets_failed": "None",
+    "sealed_secrets_failed_count": 0,
+    "sealed_secrets_total": 16,
     "server_version": "v1.36.2+k3s1",
 }
 
@@ -348,7 +351,7 @@ def test_footer_text_omits_version_when_unavailable():
 
 def test_build_summary_fields():
     fields = reporting.build_summary_fields(HEALTHY_STATE)
-    assert len(fields) == 15
+    assert len(fields) == 16
     assert all(field["inline"] for field in fields)
     by_name = {field["name"]: field["value"] for field in fields}
     assert by_name["🖥️ Nodes"] == "1/1 Ready"
@@ -362,6 +365,7 @@ def test_build_summary_fields():
     assert by_name["🐘 Postgres"] == "✅ 1/1 Healthy"
     assert by_name["💽 Disk Usage"] == "✅ 53%"
     assert by_name["🔑 K3s Cert"] == "✅ 313d"
+    assert by_name["🔐 SealedSecrets"] == "✅ 16/16 Synced"
 
 
 def test_build_summary_fields_externaldns_failure():
@@ -767,6 +771,31 @@ def test_gather_cnpg_status_flags_unhealthy_and_stale_backups(monkeypatch):
     assert "broken\tContinuousArchiving: unexpected failure" in result["cnpg_issues"]
     assert "broken\tno completed backup since" in result["cnpg_issues"]
     assert "\thealthy\t" not in result["cnpg_issues"]
+
+
+def test_gather_sealed_secrets_flags_unsynced(monkeypatch):
+    items = [
+        {
+            "metadata": {"namespace": "auth", "name": "dex-secrets"},
+            "status": {"conditions": [{"type": "Synced", "status": "True"}]},
+        },
+        {
+            "metadata": {"namespace": "n8n", "name": "n8n-env"},
+            "status": {
+                "conditions": [
+                    {"type": "Synced", "status": "False", "message": "no key could decrypt secret"}
+                ]
+            },
+        },
+    ]
+    monkeypatch.setattr(config, "SEALED_SECRETS_CHECK_ENABLED", True)
+    monkeypatch.setattr(kube, "run_kubectl", lambda args: (json.dumps({"items": items}), ""))
+
+    result = kube.gather_sealed_secrets()
+
+    assert result["sealed_secrets_failed"] == "n8n\tn8n-env\tno key could decrypt secret"
+    fields = reporting.build_summary_fields(dict(HEALTHY_STATE, **result))
+    assert {f["name"]: f["value"] for f in fields}["🔐 SealedSecrets"] == "❌ 1/2 Synced"
 
 
 def test_gather_flux_status_disabled_skips_call(monkeypatch):

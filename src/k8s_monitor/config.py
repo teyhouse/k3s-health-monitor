@@ -49,6 +49,8 @@ CNPG_BACKUP_MAX_AGE_HOURS = int(os.environ.get("CNPG_BACKUP_MAX_AGE_HOURS", "24"
 CNPG_HEALTHY_PHASE = "Cluster in healthy state"
 CNPG_CONDITIONS = ["Ready", "ContinuousArchiving", "LastBackupSucceeded"]
 
+SEALED_SECRETS_CHECK_ENABLED = _env_flag("SEALED_SECRETS_CHECK_ENABLED")
+
 FLUX_CHECK_ENABLED = _env_flag("FLUX_CHECK_ENABLED")
 FLUX_KINDS = [
     "gitrepositories.source.toolkit.fluxcd.io",
